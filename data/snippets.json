@@ -1,0 +1,87 @@
+[
+  {
+    "name": "func~",
+    "snippet": "function ${1:name}(${2:params}) {\n\t${0:// body}\n}",
+    "description": "Function definition snippet"
+  },
+  {
+    "name": "if~",
+    "snippet": "if (${1:condition}) {\n\t${0:// body}\n}",
+    "description": "If statement snippet"
+  },
+  {
+    "name": "ifelse~",
+    "snippet": "if (${1:condition}) {\n\t${2:// if body}\n} else {\n\t${0:// else body}\n}",
+    "description": "If-Else statement snippet"
+  },
+  {
+    "name": "for~",
+    "snippet": "for (${1:i} = 0; ${1:i} < ${2:count}; ${1:i}++) {\n\t${0:// body}\n}",
+    "description": "For loop snippet"
+  },
+  {
+    "name": "while~",
+    "snippet": "while (${1:condition}) {\n\t${0:// body}\n}",
+    "description": "While loop snippet"
+  },
+  {
+    "name": "dowhile~",
+    "snippet": "do {\n\t${0:// body}\n} while (${1:condition});",
+    "description": "Do-While loop snippet"
+  },
+  {
+    "name": "switch~",
+    "snippet": "switch (${1:expression}) {\n\tcase ${2:value}:\n\t\t${0:// body}\n\t\tbreak;\n\tdefault:\n\t\tbreak;\n}",
+    "description": "Switch statement snippet"
+  },
+  {
+    "name": "int8~",
+    "snippet": "const int8 ${1:name}[] = { ${0:values} };",
+    "description": "8-bit integer array declaration snippet"
+  },
+  {
+    "name": "int16~",
+    "snippet": "const int16 ${1:name}[] = { ${0:values} };",
+    "description": "16-bit integer array declaration snippet"
+  },
+  {
+    "name": "int32~",
+    "snippet": "const int ${1:name}[] = { ${0:values} };",
+    "description": "32-bit integer array declaration snippet"
+  },
+  {
+    "name": "uint8~",
+    "snippet": "const uint8 ${1:name}[] = { ${0:values} };",
+    "description": "8-bit unsigned integer array declaration snippet"
+  },
+  {
+    "name": "uint16~",
+    "snippet": "const uint16 ${1:name}[] = { ${0:values} };",
+    "description": "16-bit unsigned integer array declaration snippet"
+  },
+  {
+    "name": "int8~~",
+    "snippet": "const int8 ${1:name}[][] = { ${0:values} };",
+    "description": "8-bit integer array declaration snippet"
+  },
+  {
+    "name": "int16~~",
+    "snippet": "const int16 ${1:name}[][] = { ${0:values} };",
+    "description": "16-bit integer array declaration snippet"
+  },
+  {
+    "name": "int32~~",
+    "snippet": "const int ${1:name}[][] = { ${0:values} };",
+    "description": "32-bit integer array declaration snippet"
+  },
+  {
+    "name": "uint8~~",
+    "snippet": "const uint8 ${1:name}[][] = { ${0:values} };",
+    "description": "8-bit unsigned integer array declaration snippet"
+  },
+  {
+    "name": "uint16~~",
+    "snippet": "const uint16 ${1:name}[][] = { ${0:values} };",
+    "description": "16-bit unsigned integer array declaration snippet"
+  }
+]

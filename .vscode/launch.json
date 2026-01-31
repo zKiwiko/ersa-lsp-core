@@ -1,0 +1,24 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb-dap",
+      "request": "launch",
+      "name": "DEBUG LSP",
+      "program": "${workspaceFolder}/target/debug/ersa_lsp",
+      "args": ["--stdio"],
+      "env": [],
+      "cwd": "${workspaceFolder}"
+    }
+    // {
+    //   "type": "lldb-dap",
+    //   "request": "launch",
+    //   "name": "Debug Ersa LSP",
+    //   "cargo": {
+    //     "args": ["run", "--bin", "ersa_lsp"]
+    //   },
+    //   "args": ["--stdio"],
+    //   "cwd": "${workspaceFolder}"
+    // }
+  ]
+}
