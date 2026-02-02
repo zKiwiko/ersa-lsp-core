@@ -45,6 +45,7 @@ impl LSP {
             let user_functions = self.user_functions.clone();
             let user_variables = self.user_variables.clone();
             let last_edit_times = self.last_edit_times.clone();
+            let client = self.client.clone();
 
             tokio::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
@@ -68,7 +69,112 @@ impl LSP {
                         let mut parser = parser.lock().unwrap();
                         parser.extract_user_variables(&text_clone, &uri_clone)
                     };
-                    user_variables.lock().unwrap().insert(uri_clone, variables);
+                    user_variables
+                        .lock()
+                        .unwrap()
+                        .insert(uri_clone.clone(), variables);
+
+                    // Publish diagnostics after updating symbols
+                    let mut diagnostics = Vec::new();
+
+                    // Check for duplicate definitions - sort by position first
+                    let mut seen_funcs: std::collections::HashMap<
+                        String,
+                        tower_lsp::lsp_types::Range,
+                    > = std::collections::HashMap::new();
+                    if let Some(funcs) = user_functions.lock().unwrap().get(&uri_clone) {
+                        let mut sorted_funcs: Vec<_> = funcs.iter().collect();
+                        sorted_funcs.sort_by_key(|f| {
+                            (
+                                f.definition.range.start.line,
+                                f.definition.range.start.character,
+                            )
+                        });
+
+                        for func in sorted_funcs {
+                            if let Some(first_range) = seen_funcs.get(&func.name) {
+                                diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                                    range: func.definition.range,
+                                    severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                                    code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                                        "duplicate-function".to_string(),
+                                    )),
+                                    source: Some("ersa_lsp".to_string()),
+                                    message: format!(
+                                        "Function '{}' is already defined on line {}",
+                                        func.name,
+                                        first_range.start.line + 1
+                                    ),
+                                    related_information: Some(vec![
+                                        tower_lsp::lsp_types::DiagnosticRelatedInformation {
+                                            location: tower_lsp::lsp_types::Location {
+                                                uri: tower_lsp::lsp_types::Url::parse(&uri_clone)
+                                                    .unwrap(),
+                                                range: *first_range,
+                                            },
+                                            message: "First defined here".to_string(),
+                                        },
+                                    ]),
+                                    ..Default::default()
+                                });
+                            } else {
+                                seen_funcs.insert(func.name.clone(), func.definition.range);
+                            }
+                        }
+                    }
+
+                    let mut seen_vars: std::collections::HashMap<
+                        String,
+                        tower_lsp::lsp_types::Range,
+                    > = std::collections::HashMap::new();
+                    if let Some(vars) = user_variables.lock().unwrap().get(&uri_clone) {
+                        let mut sorted_vars: Vec<_> = vars.iter().collect();
+                        sorted_vars.sort_by_key(|v| {
+                            (
+                                v.definition.range.start.line,
+                                v.definition.range.start.character,
+                            )
+                        });
+
+                        for var in sorted_vars {
+                            if let Some(first_range) = seen_vars.get(&var.name) {
+                                diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                                    range: var.definition.range,
+                                    severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
+                                    code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                                        "duplicate-variable".to_string(),
+                                    )),
+                                    source: Some("ersa_lsp".to_string()),
+                                    message: format!(
+                                        "Variable '{}' is already defined on line {}",
+                                        var.name,
+                                        first_range.start.line + 1
+                                    ),
+                                    related_information: Some(vec![
+                                        tower_lsp::lsp_types::DiagnosticRelatedInformation {
+                                            location: tower_lsp::lsp_types::Location {
+                                                uri: tower_lsp::lsp_types::Url::parse(&uri_clone)
+                                                    .unwrap(),
+                                                range: *first_range,
+                                            },
+                                            message: "First defined here".to_string(),
+                                        },
+                                    ]),
+                                    ..Default::default()
+                                });
+                            } else {
+                                seen_vars.insert(var.name.clone(), var.definition.range);
+                            }
+                        }
+                    }
+
+                    client
+                        .publish_diagnostics(
+                            tower_lsp::lsp_types::Url::parse(&uri_clone).unwrap(),
+                            diagnostics,
+                            None,
+                        )
+                        .await;
                 }
             });
         }

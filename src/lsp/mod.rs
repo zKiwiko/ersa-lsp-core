@@ -157,35 +157,132 @@ impl LSP {
             .insert(uri.to_string(), variables);
     }
 
+    fn check_duplicate_definitions(&self, uri: &str) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        // Check duplicate functions
+        let user_funcs = self.user_functions.lock().unwrap();
+        if let Some(funcs) = user_funcs.get(uri) {
+            // Sort functions by position to ensure we identify the first definition correctly
+            let mut sorted_funcs: Vec<_> = funcs.iter().collect();
+            sorted_funcs.sort_by_key(|f| {
+                (
+                    f.definition.range.start.line,
+                    f.definition.range.start.character,
+                )
+            });
+
+            let mut seen_names: HashMap<String, &parser::types::UserFunction> = HashMap::new();
+
+            for func in sorted_funcs {
+                if let Some(first_def) = seen_names.get(&func.name) {
+                    // This is a redefinition - error out
+                    diagnostics.push(Diagnostic {
+                        range: func.definition.range,
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: Some(NumberOrString::String("duplicate-function".to_string())),
+                        code_description: None,
+                        source: Some("ersa_lsp".to_string()),
+                        message: format!(
+                            "Function '{}' is already defined on line {}",
+                            func.name,
+                            first_def.definition.range.start.line + 1
+                        ),
+                        related_information: Some(vec![DiagnosticRelatedInformation {
+                            location: tower_lsp::lsp_types::Location {
+                                uri: Url::parse(&first_def.definition.uri).unwrap(),
+                                range: first_def.definition.range,
+                            },
+                            message: "First defined here".to_string(),
+                        }]),
+                        tags: None,
+                        data: None,
+                    });
+                } else {
+                    seen_names.insert(func.name.clone(), func);
+                }
+            }
+        }
+
+        // Check duplicate variables
+        let user_vars = self.user_variables.lock().unwrap();
+        if let Some(vars) = user_vars.get(uri) {
+            // Sort variables by position to ensure we identify the first definition correctly
+            let mut sorted_vars: Vec<_> = vars.iter().collect();
+            sorted_vars.sort_by_key(|v| {
+                (
+                    v.definition.range.start.line,
+                    v.definition.range.start.character,
+                )
+            });
+
+            let mut seen_names: HashMap<String, &parser::types::UserVariable> = HashMap::new();
+
+            for var in sorted_vars {
+                if let Some(first_def) = seen_names.get(&var.name) {
+                    // This is a redefinition - error out
+                    diagnostics.push(Diagnostic {
+                        range: var.definition.range,
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: Some(NumberOrString::String("duplicate-variable".to_string())),
+                        code_description: None,
+                        source: Some("ersa_lsp".to_string()),
+                        message: format!(
+                            "Variable '{}' is already defined on line {}",
+                            var.name,
+                            first_def.definition.range.start.line + 1
+                        ),
+                        related_information: Some(vec![DiagnosticRelatedInformation {
+                            location: tower_lsp::lsp_types::Location {
+                                uri: Url::parse(&first_def.definition.uri).unwrap(),
+                                range: first_def.definition.range,
+                            },
+                            message: "First defined here".to_string(),
+                        }]),
+                        tags: None,
+                        data: None,
+                    });
+                } else {
+                    seen_names.insert(var.name.clone(), var);
+                }
+            }
+        }
+
+        diagnostics
+    }
+
     pub async fn publish_diagnostics(&self, uri: &str, text: &str) {
+        let mut diagnostics = Vec::new();
+
+        // Collect syntax errors
         let errors = {
             let mut parser = self.parser.lock().unwrap();
             parser.find_syntax_errors(text)
         };
 
-        let diagnostics: Vec<Diagnostic> = errors
-            .into_iter()
-            .map(|(line, col, message)| Diagnostic {
-                range: Range {
-                    start: Position {
-                        line: line as u32,
-                        character: col as u32,
-                    },
-                    end: Position {
-                        line: line as u32,
-                        character: (col + 1) as u32,
-                    },
+        diagnostics.extend(errors.into_iter().map(|(line, col, message)| Diagnostic {
+            range: Range {
+                start: Position {
+                    line: line as u32,
+                    character: col as u32,
                 },
-                severity: Some(DiagnosticSeverity::ERROR),
-                code: None,
-                code_description: None,
-                source: Some("ersa_lsp".to_string()),
-                message,
-                related_information: None,
-                tags: None,
-                data: None,
-            })
-            .collect();
+                end: Position {
+                    line: line as u32,
+                    character: (col + 1) as u32,
+                },
+            },
+            severity: Some(DiagnosticSeverity::ERROR),
+            code: Some(NumberOrString::String("syntax-error".to_string())),
+            code_description: None,
+            source: Some("ersa_lsp".to_string()),
+            message,
+            related_information: None,
+            tags: None,
+            data: None,
+        }));
+
+        // Collect duplicate definition errors
+        diagnostics.extend(self.check_duplicate_definitions(uri));
 
         self.client
             .publish_diagnostics(Url::parse(uri).unwrap(), diagnostics, None)

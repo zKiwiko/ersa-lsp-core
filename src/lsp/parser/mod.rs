@@ -39,6 +39,10 @@ impl GpcParser {
 
         let var_nodes = find_by_kind(&mut cursor, "variable_declaration");
         for node in var_nodes {
+            // Skip if the node itself is an error or has errors
+            if node.is_error() || node.is_missing() || node.has_error() {
+                continue;
+            }
             variables.extend(Self::extract_variables_from_declaration(
                 node,
                 source,
@@ -50,6 +54,10 @@ impl GpcParser {
         cursor = root.walk();
         let const_nodes = find_by_kind(&mut cursor, "const_variable_declaration");
         for node in const_nodes {
+            // Skip if the node itself is an error or has errors
+            if node.is_error() || node.is_missing() || node.has_error() {
+                continue;
+            }
             variables.extend(Self::extract_variables_from_declaration(
                 node,
                 source,
@@ -61,6 +69,10 @@ impl GpcParser {
         cursor = root.walk();
         let define_nodes = find_by_kind(&mut cursor, "define_declaration");
         for node in define_nodes {
+            // Skip if the node itself is an error or has errors
+            if node.is_error() || node.is_missing() || node.has_error() {
+                continue;
+            }
             if let Some(var) = Self::extract_define_variable(node, source, uri) {
                 variables.push(var);
             }
@@ -69,6 +81,10 @@ impl GpcParser {
         cursor = root.walk();
         let enum_nodes = find_by_kind(&mut cursor, "enum_declaration");
         for node in enum_nodes {
+            // Skip if the node itself is an error or has errors
+            if node.is_error() || node.is_missing() || node.has_error() {
+                continue;
+            }
             variables.extend(Self::extract_enum_members(node, source, uri));
         }
 
@@ -202,6 +218,7 @@ impl GpcParser {
 
         function_nodes
             .into_iter()
+            .filter(|node| !node.is_error() && !node.is_missing() && !node.has_error())
             .filter_map(|node| Self::extract_function_info(node, source, uri))
             .collect()
     }
