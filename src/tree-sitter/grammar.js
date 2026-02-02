@@ -19,7 +19,20 @@ module.exports = grammar({
         $.define_declaration,
         $.enum_declaration,
         $.data_declaration,
+        $.remap_declaration,
+        $.unmap_declaration,
       ),
+
+    remap_declaration: ($) =>
+      seq(
+        "remap",
+        field("from", $.identifier),
+        "->",
+        field("to", $.identifier),
+        ";",
+      ),
+
+    unmap_declaration: ($) => seq("unmap", field("button", $.identifier), ";"),
 
     // Special blocks
     main_block: ($) => seq("main", optional(seq("(", ")")), $.block),

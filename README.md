@@ -30,8 +30,9 @@
 - Signature Help
 - Document Symbols
 - Document Highlight
+- Semantic Token Highlighting
 - Folding ranges
-- Code Documents (comments above definitions)
+- Code Documents
 
 ### Use as crate:
 

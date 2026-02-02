@@ -45,8 +45,15 @@ fn is_word_boundary(line: &str, start: usize, end: usize) -> bool {
 
 impl LSP {
     fn get_document_text(&self, uri: &Url) -> Option<String> {
-        let documents = self.documents.lock().unwrap();
-        documents.get(&uri.to_string()).cloned()
+        self.documents
+            .lock()
+            .unwrap()
+            .get(&uri.to_string())
+            .cloned()
+    }
+
+    fn uri_string(uri: &Url) -> String {
+        uri.to_string()
     }
 
     fn find_word_positions(&self, lines: &[&str], word: &str) -> Vec<Range> {
@@ -82,7 +89,6 @@ impl LSP {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-
         let Some(text) = self.get_document_text(&uri) else {
             return Ok(None);
         };
@@ -90,33 +96,36 @@ impl LSP {
         let Some(line) = lines.get(position.line as usize) else {
             return Ok(None);
         };
-
         let word = extract_word_at_position(line, position.character as usize);
+
         if word.is_empty() {
             return Ok(None);
         }
 
+        let uri_str = Self::uri_string(&uri);
         let user_funcs = self.user_functions.lock().unwrap();
-        if let Some(funcs) = user_funcs.get(&uri.to_string()) {
-            if let Some(func) = funcs.iter().find(|f| f.name == word) {
-                if let Ok(func_uri) = Url::parse(&func.definition.uri) {
-                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
-                        uri: func_uri,
-                        range: func.definition.range,
-                    })));
-                }
+        if let Some(func) = user_funcs
+            .get(&uri_str)
+            .and_then(|funcs| funcs.iter().find(|f| f.name == word))
+        {
+            if let Ok(func_uri) = Url::parse(&func.definition.uri) {
+                return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                    uri: func_uri,
+                    range: func.definition.range,
+                })));
             }
         }
 
         let user_vars = self.user_variables.lock().unwrap();
-        if let Some(vars) = user_vars.get(&uri.to_string()) {
-            if let Some(var) = vars.iter().find(|v| v.name == word) {
-                if let Ok(var_uri) = Url::parse(&var.definition.uri) {
-                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
-                        uri: var_uri,
-                        range: var.definition.range,
-                    })));
-                }
+        if let Some(var) = user_vars
+            .get(&uri_str)
+            .and_then(|vars| vars.iter().find(|v| v.name == word))
+        {
+            if let Ok(var_uri) = Url::parse(&var.definition.uri) {
+                return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                    uri: var_uri,
+                    range: var.definition.range,
+                })));
             }
         }
 
@@ -160,41 +169,42 @@ impl LSP {
 
                 let mut items = Vec::new();
 
-                for &keyword in data::KEYWORDS {
-                    if keyword.starts_with(prefix) {
-                        items.push(CompletionItem {
-                            label: keyword.to_string(),
+                items.extend(
+                    data::KEYWORDS
+                        .iter()
+                        .filter(|kw| kw.starts_with(prefix))
+                        .map(|kw| CompletionItem {
+                            label: kw.to_string(),
                             kind: Some(CompletionItemKind::KEYWORD),
                             detail: Some("Language keyword".to_string()),
                             ..Default::default()
-                        });
-                    }
-                }
+                        }),
+                );
 
-                for &datatype in data::DATATYPES {
-                    if datatype.starts_with(prefix) {
-                        items.push(CompletionItem {
-                            label: datatype.to_string(),
+                items.extend(
+                    data::DATATYPES
+                        .iter()
+                        .filter(|dt| dt.starts_with(prefix))
+                        .map(|dt| CompletionItem {
+                            label: dt.to_string(),
                             kind: Some(CompletionItemKind::TYPE_PARAMETER),
                             detail: Some("Language data type".to_string()),
                             ..Default::default()
-                        });
-                    }
-                }
+                        }),
+                );
 
-                for constant in data::get_constants() {
-                    if constant.starts_with(prefix) {
-                        items.push(CompletionItem {
-                            label: constant.to_string(),
+                items.extend(
+                    data::get_constants()
+                        .into_iter()
+                        .filter(|c| c.starts_with(prefix))
+                        .take(50 - items.len())
+                        .map(|c| CompletionItem {
+                            label: c.clone(),
                             kind: Some(CompletionItemKind::CONSTANT),
                             detail: Some("Language constant".to_string()),
                             ..Default::default()
-                        });
-                    }
-                    if items.len() >= 50 {
-                        break;
-                    }
-                }
+                        }),
+                );
 
                 if items.len() < 50 {
                     for func in data::get_builtins() {
@@ -317,7 +327,6 @@ impl LSP {
     pub async fn handle_hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-
         let Some(text) = self.get_document_text(&uri) else {
             return Ok(None);
         };
@@ -325,52 +334,56 @@ impl LSP {
         let Some(line) = lines.get(position.line as usize) else {
             return Ok(None);
         };
-
         let word = extract_word_at_position(line, position.character as usize);
+
         if word.is_empty() {
             return Ok(None);
         }
 
+        let uri_str = Self::uri_string(&uri);
+        let create_hover = |content: String| {
+            Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: content,
+                }),
+                range: None,
+            })
+        };
+
         let user_funcs = self.user_functions.lock().unwrap();
-        if let Some(funcs) = user_funcs.get(&uri.to_string()) {
-            if let Some(func) = funcs.iter().find(|f| f.name == word) {
-                let params_str = func.parameters.join(", ");
-                let mut content = format!("```gpc\nfunction {}({})\n```", func.name, params_str);
-                if let Some(doc) = &func.documentation {
-                    content.push_str("\n\n");
-                    content.push_str(doc);
-                }
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: content,
-                    }),
-                    range: None,
-                }));
+        if let Some(func) = user_funcs
+            .get(&uri_str)
+            .and_then(|funcs| funcs.iter().find(|f| f.name == word))
+        {
+            let mut content = format!(
+                "```gpc\nfunction {}({})\n```",
+                func.name,
+                func.parameters.join(", ")
+            );
+            if let Some(doc) = &func.documentation {
+                content.push_str("\n\n");
+                content.push_str(doc);
             }
+            return Ok(create_hover(content));
         }
 
         let user_vars = self.user_variables.lock().unwrap();
-        if let Some(vars) = user_vars.get(&uri.to_string()) {
-            if let Some(var) = vars.iter().find(|v| v.name == word) {
-                let type_str = var
-                    .data_type
-                    .as_ref()
-                    .map(|dt| format!("{:?}", dt))
-                    .unwrap_or_else(|| "unknown".to_string());
-                let mut content = format!("```gpc\n{} {}\n```", type_str, var.name);
-                if let Some(doc) = &var.documentation {
-                    content.push_str("\n\n");
-                    content.push_str(doc);
-                }
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: content,
-                    }),
-                    range: None,
-                }));
+        if let Some(var) = user_vars
+            .get(&uri_str)
+            .and_then(|vars| vars.iter().find(|v| v.name == word))
+        {
+            let type_str = var
+                .data_type
+                .as_ref()
+                .map(|dt| format!("{:?}", dt))
+                .unwrap_or_else(|| "unknown".to_string());
+            let mut content = format!("```gpc\n{} {}\n```", type_str, var.name);
+            if let Some(doc) = &var.documentation {
+                content.push_str("\n\n");
+                content.push_str(doc);
             }
+            return Ok(create_hover(content));
         }
 
         if let Some(func) = data::get_builtins().iter().find(|f| f.name == word) {
@@ -506,7 +519,6 @@ impl LSP {
     ) -> Result<Option<SignatureHelp>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-
         let Some(text) = self.get_document_text(&uri) else {
             return Ok(None);
         };
@@ -567,27 +579,32 @@ impl LSP {
             }
         };
 
-        if let Some(func) = data::get_builtins().iter().find(|f| f.name == func_name) {
-            let signature =
-                create_signature(&func.name, &func.parameters, Some(func.description.clone()));
-            return Ok(Some(SignatureHelp {
+        let create_help = |signature| {
+            Some(SignatureHelp {
                 signatures: vec![signature],
                 active_signature: Some(0),
                 active_parameter: Some(active_parameter as u32),
-            }));
+            })
+        };
+
+        if let Some(func) = data::get_builtins().iter().find(|f| f.name == func_name) {
+            return Ok(create_help(create_signature(
+                &func.name,
+                &func.parameters,
+                Some(func.description.clone()),
+            )));
         }
 
         let user_funcs = self.user_functions.lock().unwrap();
-        if let Some(funcs) = user_funcs.get(&uri.to_string()) {
-            if let Some(func) = funcs.iter().find(|f| f.name == func_name) {
-                let signature =
-                    create_signature(&func.name, &func.parameters, func.documentation.clone());
-                return Ok(Some(SignatureHelp {
-                    signatures: vec![signature],
-                    active_signature: Some(0),
-                    active_parameter: Some(active_parameter as u32),
-                }));
-            }
+        if let Some(func) = user_funcs
+            .get(&Self::uri_string(&uri))
+            .and_then(|funcs| funcs.iter().find(|f| f.name == func_name))
+        {
+            return Ok(create_help(create_signature(
+                &func.name,
+                &func.parameters,
+                func.documentation.clone(),
+            )));
         }
 
         Ok(None)
@@ -599,7 +616,6 @@ impl LSP {
     ) -> Result<Option<Vec<Location>>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-
         let Some(text) = self.get_document_text(&uri) else {
             return Ok(None);
         };
@@ -607,8 +623,8 @@ impl LSP {
         let Some(line) = lines.get(position.line as usize) else {
             return Ok(None);
         };
-
         let word = extract_word_at_position(line, position.character as usize);
+
         if word.is_empty() {
             return Ok(None);
         }
@@ -618,17 +634,13 @@ impl LSP {
             return Ok(None);
         }
 
-        let Some(location_uri) = Url::parse(&uri.to_string()).ok() else {
-            return Ok(None);
-        };
         let locations = ranges
             .into_iter()
             .map(|range| Location {
-                uri: location_uri.clone(),
+                uri: uri.clone(),
                 range,
             })
             .collect();
-
         Ok(Some(locations))
     }
 
@@ -700,7 +712,6 @@ impl LSP {
     ) -> Result<Option<Vec<DocumentHighlight>>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-
         let Some(text) = self.get_document_text(&uri) else {
             return Ok(None);
         };
@@ -708,33 +719,33 @@ impl LSP {
         let Some(line) = lines.get(position.line as usize) else {
             return Ok(None);
         };
-
         let word = extract_word_at_position(line, position.character as usize);
+
         if word.is_empty() {
             return Ok(None);
         }
 
+        let uri_str = Self::uri_string(&uri);
         let is_definition_line = |line_idx: usize| -> bool {
-            let user_funcs = self.user_functions.lock().unwrap();
-            if let Some(funcs) = user_funcs.get(&uri.to_string()) {
-                if funcs
-                    .iter()
-                    .any(|f| f.name == word && f.definition.range.start.line == line_idx as u32)
-                {
-                    return true;
-                }
-            }
-
-            let user_vars = self.user_variables.lock().unwrap();
-            if let Some(vars) = user_vars.get(&uri.to_string()) {
-                if vars
-                    .iter()
-                    .any(|v| v.name == word && v.definition.range.start.line == line_idx as u32)
-                {
-                    return true;
-                }
-            }
-            false
+            let line = line_idx as u32;
+            self.user_functions
+                .lock()
+                .unwrap()
+                .get(&uri_str)
+                .map_or(false, |funcs| {
+                    funcs
+                        .iter()
+                        .any(|f| f.name == word && f.definition.range.start.line == line)
+                })
+                || self
+                    .user_variables
+                    .lock()
+                    .unwrap()
+                    .get(&uri_str)
+                    .map_or(false, |vars| {
+                        vars.iter()
+                            .any(|v| v.name == word && v.definition.range.start.line == line)
+                    })
         };
 
         let ranges = self.find_word_positions(&lines, &word);
@@ -761,7 +772,6 @@ impl LSP {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let new_name = params.new_name;
-
         let Some(text) = self.get_document_text(&uri) else {
             return Ok(None);
         };
@@ -769,8 +779,8 @@ impl LSP {
         let Some(line) = lines.get(position.line as usize) else {
             return Ok(None);
         };
-
         let old_name = extract_word_at_position(line, position.character as usize);
+
         if old_name.is_empty() {
             return Ok(None);
         }

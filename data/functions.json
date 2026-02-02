@@ -7,7 +7,7 @@
     {
         "name": "get_lval",
         "parameters": ["input"],
-        "description": "Returns the last value of a button or axis"
+        "description": "Returns the last value of a button or axis from the previous cycle"
     },
     {
         "name": "get_ptime",
@@ -37,7 +37,7 @@
     {
         "name": "get_ival",
         "parameters": ["input"],
-        "description": "Returns the current unmodified (input) value of a button or axis"
+        "description": "Returns the current unmodified input value of a button or axis"
     },
     {
         "name": "get_brtime",
@@ -46,7 +46,7 @@
     },
     {
         "name": "swap",
-        "parameters": ["input1", "input2"],
+        "parameters": ["what", "with"],
         "description": "Swaps the values of two inputs"
     },
     {
@@ -233,16 +233,6 @@
         "name": "get_ipolar",
         "parameters": ["stick", "type"],
         "description": "Gets unmodified (input) stick polar value"
-    },
-    {
-        "name": "remap",
-        "parameters": ["from", "to"],
-        "description": "Remaps input button to output button"
-    },
-    {
-        "name": "unmap",
-        "parameters": ["button"],
-        "description": "Removes button remapping"
     },
     {
         "name": "combo_run",
@@ -471,8 +461,8 @@
     },
     {
         "name": "image_oled",
-        "parameters": ["x offset", "y offset ", "color", "clear background", "const image"],
-        "description": "Prints an image to the OLED display. True details are undocumented.\nMost common use case is: image_oled(0, 0, 1, TRUE, image_array[0]);"
+        "parameters": ["x-offset", "y-offset", "color", "clear-background", "const-image"],
+        "description": "Prints an image to the OLED display."
     },
     {
         "name": "get_pvar",

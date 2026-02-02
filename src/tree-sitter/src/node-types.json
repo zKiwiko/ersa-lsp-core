@@ -1077,6 +1077,32 @@
     }
   },
   {
+    "type": "remap_declaration",
+    "named": true,
+    "fields": {
+      "from": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "to": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "return_statement",
     "named": true,
     "fields": {},
@@ -1130,6 +1156,14 @@
         },
         {
           "type": "main_block",
+          "named": true
+        },
+        {
+          "type": "remap_declaration",
+          "named": true
+        },
+        {
+          "type": "unmap_declaration",
           "named": true
         },
         {
@@ -1211,6 +1245,22 @@
           {
             "type": "~",
             "named": false
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "unmap_declaration",
+    "named": true,
+    "fields": {
+      "button": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
           }
         ]
       }
@@ -1417,6 +1467,10 @@
     "named": false
   },
   {
+    "type": "->",
+    "named": false
+  },
+  {
     "type": "/",
     "named": false
   },
@@ -1599,6 +1653,10 @@
     "named": false
   },
   {
+    "type": "remap",
+    "named": false
+  },
+  {
     "type": "return",
     "named": false
   },
@@ -1620,6 +1678,10 @@
   },
   {
     "type": "uint8",
+    "named": false
+  },
+  {
+    "type": "unmap",
     "named": false
   },
   {

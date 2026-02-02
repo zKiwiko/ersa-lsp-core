@@ -21,7 +21,7 @@ pub const DATATYPES: &[&str] = &[
 
 pub const KEYWORDS: &[&str] = &[
     "main", "init", "combo", "fcombo", "function", "if", "else", "while", "for", "return", "break",
-    "continue", "const", "enum", "define", "do", "switch", "case", "default",
+    "continue", "const", "enum", "define", "do", "switch", "case", "default", "remap", "unmap",
 ];
 
 static CONSTANTS: Lazy<Vec<String>> = Lazy::new(|| {

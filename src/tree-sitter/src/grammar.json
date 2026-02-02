@@ -48,6 +48,68 @@
         {
           "type": "SYMBOL",
           "name": "data_declaration"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "remap_declaration"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "unmap_declaration"
+        }
+      ]
+    },
+    "remap_declaration": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "remap"
+        },
+        {
+          "type": "FIELD",
+          "name": "from",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "->"
+        },
+        {
+          "type": "FIELD",
+          "name": "to",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ";"
+        }
+      ]
+    },
+    "unmap_declaration": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "unmap"
+        },
+        {
+          "type": "FIELD",
+          "name": "button",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ";"
         }
       ]
     },
