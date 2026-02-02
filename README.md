@@ -6,11 +6,18 @@
   - All language constants
   - All language functions
   - All language data types
-  - user defined functions
+  - For User Defined Functions
+  - For User Defined Variables
+  - **Specs**
+    - 300ms Debounce time before updating on change
 
 - Inlay Hints
-  - built in function parameters
-  - user defined function parameters
+  - Built in function parameters
+  - User defined function parameters
+
+- Goto Definition
+  - For User Defined Variables
+  - For User Defined Functions
 
 ### Use as crate:
 

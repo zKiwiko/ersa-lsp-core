@@ -351,10 +351,6 @@
           "named": true
         },
         {
-          "type": "variable_declaration",
-          "named": true
-        },
-        {
           "type": "while_statement",
           "named": true
         }
@@ -577,10 +573,6 @@
             "named": true
           },
           {
-            "type": "variable_declaration",
-            "named": true
-          },
-          {
             "type": "while_statement",
             "named": true
           }
@@ -784,10 +776,6 @@
             "named": true
           },
           {
-            "type": "variable_declaration",
-            "named": true
-          },
-          {
             "type": "while_statement",
             "named": true
           }
@@ -922,10 +910,6 @@
             "named": true
           },
           {
-            "type": "variable_declaration",
-            "named": true
-          },
-          {
             "type": "while_statement",
             "named": true
           }
@@ -987,10 +971,6 @@
           },
           {
             "type": "switch_statement",
-            "named": true
-          },
-          {
-            "type": "variable_declaration",
             "named": true
           },
           {
@@ -1355,10 +1335,6 @@
             "named": true
           },
           {
-            "type": "variable_declaration",
-            "named": true
-          },
-          {
             "type": "while_statement",
             "named": true
           }
@@ -1603,10 +1579,6 @@
   },
   {
     "type": "int16",
-    "named": false
-  },
-  {
-    "type": "int32",
     "named": false
   },
   {
