@@ -37,7 +37,6 @@ impl GpcParser {
 
         let mut variables = Vec::new();
 
-        // Collect mutable variables
         let var_nodes = find_by_kind(&mut cursor, "variable_declaration");
         for node in var_nodes {
             variables.extend(Self::extract_variables_from_declaration(
@@ -48,7 +47,6 @@ impl GpcParser {
             ));
         }
 
-        // Collect const variables
         cursor = root.walk();
         let const_nodes = find_by_kind(&mut cursor, "const_variable_declaration");
         for node in const_nodes {
@@ -60,7 +58,6 @@ impl GpcParser {
             ));
         }
 
-        // Collect define variables
         cursor = root.walk();
         let define_nodes = find_by_kind(&mut cursor, "define_declaration");
         for node in define_nodes {
@@ -69,7 +66,6 @@ impl GpcParser {
             }
         }
 
-        // Collect enum members
         cursor = root.walk();
         let enum_nodes = find_by_kind(&mut cursor, "enum_declaration");
         for node in enum_nodes {
@@ -87,16 +83,13 @@ impl GpcParser {
     ) -> Vec<types::UserVariable> {
         let mut variables = Vec::new();
 
-        // Get the type field
         let data_type = get_child_by_kind(node, "type")
             .and_then(|type_node| type_node.utf8_text(source.as_bytes()).ok())
             .and_then(Self::parse_data_type);
 
-        // Get all variable_declarator children
         let declarators = get_children_by_kind(node, "variable_declarator");
 
         for declarator in declarators {
-            // Get the identifier (name)
             let Some(name) = get_child_by_kind(declarator, "identifier")
                 .and_then(|n| n.utf8_text(source.as_bytes()).ok())
                 .map(|s| s.to_string())
@@ -104,7 +97,6 @@ impl GpcParser {
                 continue;
             };
 
-            // Count array dimensions
             let array_dims = get_children_by_kind(declarator, "array_dimension").len() as u8;
 
             let var_type = Some(types::VarType {
@@ -112,12 +104,15 @@ impl GpcParser {
                 array_dims,
             });
 
+            let documentation = Self::extract_documentation_before_node(declarator, source);
+
             variables.push(types::UserVariable {
                 name,
                 data_type: data_type.clone(),
                 var_type,
                 kind: types::VariableKind::Regular,
                 definition: Self::node_to_location(declarator, uri),
+                documentation,
             });
         }
 
@@ -130,6 +125,8 @@ impl GpcParser {
             .ok()?
             .to_string();
 
+        let documentation = Self::extract_documentation_before_node(node, source);
+
         Some(types::UserVariable {
             name,
             data_type: types::DataTypes::Int32.into(),
@@ -139,28 +136,28 @@ impl GpcParser {
             }),
             kind: types::VariableKind::Regular,
             definition: Self::node_to_location(node, uri),
+            documentation,
         })
     }
 
     fn extract_enum_members(node: Node, source: &str, uri: &str) -> Vec<types::UserVariable> {
         let mut members = Vec::new();
 
-        // Get the enum_variant_list
         let Some(variant_list) = get_child_by_kind(node, "enum_variant_list") else {
             return members;
         };
 
-        // Get all enum_variant children
         let variants = get_children_by_kind(variant_list, "enum_variant");
 
         for variant in variants {
-            // Get the identifier (name)
             let Some(name) = get_child_by_kind(variant, "identifier")
                 .and_then(|n| n.utf8_text(source.as_bytes()).ok())
                 .map(|s| s.to_string())
             else {
                 continue;
             };
+
+            let documentation = Self::extract_documentation_before_node(variant, source);
 
             members.push(types::UserVariable {
                 name,
@@ -171,6 +168,7 @@ impl GpcParser {
                 }),
                 kind: types::VariableKind::EnumMember,
                 definition: Self::node_to_location(variant, uri),
+                documentation,
             });
         }
 
@@ -193,7 +191,6 @@ impl GpcParser {
         }
     }
 
-    /// Extract all user-defined functions from the source code
     pub fn extract_user_functions(&mut self, source: &str, uri: &str) -> Vec<types::UserFunction> {
         let Some(tree) = self.parse(source) else {
             return Vec::new();
@@ -210,13 +207,11 @@ impl GpcParser {
     }
 
     fn extract_function_info(node: Node, source: &str, uri: &str) -> Option<types::UserFunction> {
-        // Get the function name (first identifier child)
         let name = get_child_by_kind(node, "identifier")?
             .utf8_text(source.as_bytes())
             .ok()?
             .to_string();
 
-        // Get parameters from parameter_list
         let parameters = get_child_by_kind(node, "parameter_list")
             .map(|param_list| {
                 get_children_by_kind(param_list, "identifier")
@@ -227,14 +222,16 @@ impl GpcParser {
             })
             .unwrap_or_default();
 
-        Some(types::UserFunction { 
-            name, 
+        let documentation = Self::extract_documentation_before_node(node, source);
+
+        Some(types::UserFunction {
+            name,
             parameters,
             definition: Self::node_to_location(node, uri),
+            documentation,
         })
     }
 
-    /// Find syntax errors in the parsed tree
     pub fn find_syntax_errors(&mut self, source: &str) -> Vec<(usize, usize, String)> {
         let Some(tree) = self.parse(source) else {
             return Vec::new();
@@ -268,7 +265,6 @@ impl GpcParser {
         errors
     }
 
-    /// Helper function to create a Location from a tree-sitter Node
     fn node_to_location(node: Node, uri: &str) -> types::Location {
         types::Location {
             uri: uri.to_string(),
@@ -282,6 +278,53 @@ impl GpcParser {
                     character: node.end_position().column as u32,
                 },
             },
+        }
+    }
+
+    fn extract_documentation_before_node(node: Node, source: &str) -> Option<String> {
+        let start_line = node.start_position().row;
+        if start_line == 0 {
+            return None;
+        }
+
+        let lines: Vec<&str> = source.lines().collect();
+        let mut doc_lines = Vec::new();
+        let mut current_line = start_line.saturating_sub(1);
+
+        loop {
+            if current_line >= lines.len() {
+                break;
+            }
+
+            let line = lines[current_line].trim();
+
+            if line.starts_with("//") {
+                let comment = line.trim_start_matches('/').trim();
+                doc_lines.push(comment.to_string());
+            } else if line.starts_with("/*") || line.contains("*/") {
+                let comment = line
+                    .trim_start_matches("/*")
+                    .trim_end_matches("*/")
+                    .trim_start_matches('*')
+                    .trim();
+                if !comment.is_empty() {
+                    doc_lines.push(comment.to_string());
+                }
+            } else if !line.is_empty() {
+                break;
+            }
+
+            if current_line == 0 {
+                break;
+            }
+            current_line = current_line.saturating_sub(1);
+        }
+
+        if doc_lines.is_empty() {
+            None
+        } else {
+            doc_lines.reverse();
+            Some(doc_lines.join("\n"))
         }
     }
 }

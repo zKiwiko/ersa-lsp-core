@@ -9,6 +9,7 @@ pub struct UserFunction {
     pub name: String,
     pub parameters: Vec<String>,
     pub definition: Location,
+    pub documentation: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,4 +51,5 @@ pub struct UserVariable {
     pub var_type: Option<VarType>,
     pub kind: VariableKind,
     pub definition: Location,
+    pub documentation: Option<String>,
 }

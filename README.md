@@ -19,6 +19,20 @@
   - For User Defined Variables
   - For User Defined Functions
 
+- Symbol Rename
+  - Functions
+  - Variables
+
+- Hover
+  - Functions
+  - Variables
+
+- Signature Help
+- Document Symbols
+- Document Highlight
+- Folding ranges
+- Code Documents (comments above definitions)
+
 ### Use as crate:
 
 ```rs
