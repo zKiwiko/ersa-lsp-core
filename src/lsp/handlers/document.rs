@@ -13,6 +13,7 @@ impl LSP {
             .insert(uri.clone(), text.clone());
 
         self.update_user_functions(&uri, &text).await;
+        self.update_user_variables(&uri, &text).await;
         self.publish_diagnostics(&uri, &text).await;
 
         self.client
@@ -194,9 +195,9 @@ impl LSP {
 
         let text = self.documents.lock().unwrap().get(&uri).cloned();
         if let Some(text) = text {
-            self.publish_diagnostics(&uri, &text).await;
             self.update_user_functions(&uri.to_string(), &text).await;
             self.update_user_variables(&uri.to_string(), &text).await;
+            self.publish_diagnostics(&uri, &text).await;
         }
 
         self.client

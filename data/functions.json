@@ -2,12 +2,12 @@
     {
         "name": "get_val",
         "parameters": ["input"],
-        "description": "Returns the current value of a button or axis"
+        "description": "Returns the current value of a button, axis, or TRACE var"
     },
     {
         "name": "get_lval",
         "parameters": ["input"],
-        "description": "Returns the last value of a button or axis from the previous cycle"
+        "description": "Returns the last value of a button, axis, or TRACE var from the previous cycle"
     },
     {
         "name": "get_ptime",
@@ -411,8 +411,8 @@
     },
     {
         "name": "set_val",
-        "parameters": ["button", "value"],
-        "description": "Sets the output value of a button or axis"
+        "parameters": ["input", "value"],
+        "description": "Sets the output value of a button, axis, or TRACE var"
     },
     {
         "name": "block_all_inputs",

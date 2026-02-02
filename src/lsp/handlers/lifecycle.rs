@@ -70,6 +70,9 @@ impl LSP {
                         work_done_progress_options: WorkDoneProgressOptions::default(),
                     },
                 )),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(false),
+                }),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {

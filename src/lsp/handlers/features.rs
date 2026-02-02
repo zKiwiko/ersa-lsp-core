@@ -43,6 +43,22 @@ fn is_word_boundary(line: &str, start: usize, end: usize) -> bool {
     is_start && is_end
 }
 
+fn is_position_in_range(pos: Position, range: &Range) -> bool {
+    if pos.line < range.start.line || pos.line > range.end.line {
+        return false;
+    }
+
+    if pos.line == range.start.line && pos.character < range.start.character {
+        return false;
+    }
+
+    if pos.line == range.end.line && pos.character >= range.end.character {
+        return false;
+    }
+
+    true
+}
+
 impl LSP {
     fn get_document_text(&self, uri: &Url) -> Option<String> {
         self.documents
@@ -269,6 +285,9 @@ impl LSP {
                                 let (kind, detail) = match var.kind {
                                     parser::types::VariableKind::EnumMember => {
                                         (CompletionItemKind::ENUM_MEMBER, "Enum member".to_string())
+                                    }
+                                    parser::types::VariableKind::Define => {
+                                        (CompletionItemKind::CONSTANT, "Define".to_string())
                                     }
                                     parser::types::VariableKind::Regular => (
                                         CompletionItemKind::VARIABLE,
@@ -675,6 +694,7 @@ impl LSP {
             for var in vars {
                 let kind = match var.kind {
                     parser::types::VariableKind::EnumMember => SymbolKind::ENUM_MEMBER,
+                    parser::types::VariableKind::Define => SymbolKind::CONSTANT,
                     parser::types::VariableKind::Regular => SymbolKind::VARIABLE,
                 };
 
@@ -872,6 +892,87 @@ impl LSP {
         }
     }
 
+    pub async fn handle_code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        let uri = params.text_document.uri;
+        let Some(text) = self.get_document_text(&uri) else {
+            return Ok(None);
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        let mut lenses = Vec::new();
+
+        let user_funcs = self.user_functions.lock().unwrap();
+        if let Some(funcs) = user_funcs.get(&uri.to_string()) {
+            for func in funcs {
+                let ref_count = self
+                    .find_word_positions(&lines, &func.name)
+                    .into_iter()
+                    .filter(|r| !is_position_in_range(r.start, &func.definition.range))
+                    .count();
+
+                let reference_text = if ref_count == 1 {
+                    "1 reference".to_string()
+                } else {
+                    format!("{} references", ref_count)
+                };
+
+                lenses.push(CodeLens {
+                    range: Range {
+                        start: Position {
+                            line: func.definition.range.start.line,
+                            character: 0,
+                        },
+                        end: func.definition.range.start,
+                    },
+                    command: Some(Command {
+                        title: reference_text,
+                        command: "editor.action.showReferences".to_string(),
+                        arguments: None,
+                    }),
+                    data: None,
+                });
+            }
+        }
+
+        let user_vars = self.user_variables.lock().unwrap();
+        if let Some(vars) = user_vars.get(&uri.to_string()) {
+            for var in vars {
+                let ref_count = self
+                    .find_word_positions(&lines, &var.name)
+                    .into_iter()
+                    .filter(|r| !is_position_in_range(r.start, &var.definition.range))
+                    .count();
+
+                let reference_text = if ref_count == 1 {
+                    "1 reference".to_string()
+                } else {
+                    format!("{} references", ref_count)
+                };
+
+                lenses.push(CodeLens {
+                    range: Range {
+                        start: Position {
+                            line: var.definition.range.start.line,
+                            character: 0,
+                        },
+                        end: var.definition.range.start,
+                    },
+                    command: Some(Command {
+                        title: reference_text,
+                        command: "editor.action.showReferences".to_string(),
+                        arguments: None,
+                    }),
+                    data: None,
+                });
+            }
+        }
+
+        if lenses.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(lenses))
+        }
+    }
+
     pub async fn handle_semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
@@ -964,6 +1065,7 @@ impl LSP {
             for var in vars {
                 let token_type = match var.kind {
                     parser::types::VariableKind::EnumMember => TOKEN_TYPE_ENUM_MEMBER,
+                    parser::types::VariableKind::Define => TOKEN_TYPE_VARIABLE,
                     parser::types::VariableKind::Regular => TOKEN_TYPE_VARIABLE,
                 };
 

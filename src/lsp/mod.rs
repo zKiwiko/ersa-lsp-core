@@ -105,6 +105,10 @@ impl LanguageServer for LSP {
     ) -> Result<Option<SemanticTokensResult>> {
         self.handle_semantic_tokens_full(params).await
     }
+
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        self.handle_code_lens(params).await
+    }
 }
 
 impl LSP {
@@ -278,6 +282,14 @@ impl LSP {
 
         diagnostics.extend(self.check_enum_case(uri));
 
+        diagnostics.extend(self.check_unused_symbols(uri, text));
+
+        diagnostics.extend(self.check_immutable_assignments(uri, text));
+
+        diagnostics.extend(self.check_undefined_variables(uri, text));
+
+        diagnostics.extend(self.check_undefined_functions(uri, text));
+
         self.client
             .publish_diagnostics(Url::parse(uri).unwrap(), diagnostics, None)
             .await;
@@ -305,6 +317,420 @@ impl LSP {
                         data: None,
                     });
                 }
+            }
+        }
+
+        diagnostics
+    }
+
+    fn check_unused_symbols(&self, uri: &str, text: &str) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+        let lines: Vec<&str> = text.lines().collect();
+
+        let find_word_positions = |lines: &[&str], word: &str| -> Vec<Range> {
+            let mut positions = Vec::new();
+            for (line_idx, line_text) in lines.iter().enumerate() {
+                let mut start = 0;
+                while let Some(pos) = line_text[start..].find(word) {
+                    let actual_pos = start + pos;
+
+                    let is_start = actual_pos == 0
+                        || !line_text
+                            .chars()
+                            .nth(actual_pos - 1)
+                            .map(|c| c.is_alphanumeric() || c == '_')
+                            .unwrap_or(false);
+
+                    let is_end = actual_pos + word.len() >= line_text.len()
+                        || !line_text
+                            .chars()
+                            .nth(actual_pos + word.len())
+                            .map(|c| c.is_alphanumeric() || c == '_')
+                            .unwrap_or(false);
+
+                    if is_start && is_end {
+                        positions.push(Range {
+                            start: Position {
+                                line: line_idx as u32,
+                                character: actual_pos as u32,
+                            },
+                            end: Position {
+                                line: line_idx as u32,
+                                character: (actual_pos + word.len()) as u32,
+                            },
+                        });
+                    }
+
+                    start = actual_pos + 1;
+                }
+            }
+            positions
+        };
+
+        let user_funcs = self.user_functions.lock().unwrap();
+        if let Some(funcs) = user_funcs.get(uri) {
+            for func in funcs {
+                let all_positions = find_word_positions(&lines, &func.name);
+                let ref_count = all_positions
+                    .iter()
+                    .filter(|r| {
+                        let pos = r.start;
+                        let range = &func.definition.range;
+
+                        if pos.line < range.start.line || pos.line > range.end.line {
+                            return true;
+                        }
+
+                        if pos.line == range.start.line && pos.character < range.start.character {
+                            return true;
+                        }
+
+                        if pos.line == range.end.line && pos.character >= range.end.character {
+                            return true;
+                        }
+
+                        false
+                    })
+                    .count();
+
+                if ref_count == 0 {
+                    diagnostics.push(Diagnostic {
+                        range: func.definition.range,
+                        severity: Some(DiagnosticSeverity::WARNING),
+                        code: Some(NumberOrString::String("unused-function".to_string())),
+                        code_description: None,
+                        source: Some("ersa_lsp".to_string()),
+                        message: format!("Function '{}' is never used", func.name),
+                        related_information: None,
+                        tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                        data: None,
+                    });
+                }
+            }
+        }
+
+        let user_vars = self.user_variables.lock().unwrap();
+        if let Some(vars) = user_vars.get(uri) {
+            for var in vars {
+                let all_positions = find_word_positions(&lines, &var.name);
+                let ref_count = all_positions
+                    .iter()
+                    .filter(|r| {
+                        let pos = r.start;
+                        let range = &var.definition.range;
+
+                        if pos.line < range.start.line || pos.line > range.end.line {
+                            return true;
+                        }
+
+                        if pos.line == range.start.line && pos.character < range.start.character {
+                            return true;
+                        }
+
+                        if pos.line == range.end.line && pos.character >= range.end.character {
+                            return true;
+                        }
+
+                        false
+                    })
+                    .count();
+
+                if ref_count == 0 {
+                    let symbol_type = match var.kind {
+                        parser::types::VariableKind::EnumMember => "Enum member",
+                        parser::types::VariableKind::Define => "Define",
+                        parser::types::VariableKind::Regular => "Variable",
+                    };
+
+                    diagnostics.push(Diagnostic {
+                        range: var.definition.range,
+                        severity: Some(DiagnosticSeverity::WARNING),
+                        code: Some(NumberOrString::String("unused-variable".to_string())),
+                        code_description: None,
+                        source: Some("ersa_lsp".to_string()),
+                        message: format!("{} '{}' is never used", symbol_type, var.name),
+                        related_information: None,
+                        tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                        data: None,
+                    });
+                }
+            }
+        }
+
+        diagnostics
+    }
+
+    fn check_immutable_assignments(&self, uri: &str, text: &str) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        let user_vars = self.user_variables.lock().unwrap();
+        let Some(vars) = user_vars.get(uri) else {
+            return diagnostics;
+        };
+
+        let immutable_vars: std::collections::HashMap<&str, &parser::types::UserVariable> = vars
+            .iter()
+            .filter(|v| {
+                v.var_type
+                    .as_ref()
+                    .map(|vt| matches!(vt.mutability, parser::types::Mutability::Immutable))
+                    .unwrap_or(false)
+            })
+            .map(|v| (v.name.as_str(), v))
+            .collect();
+
+        // Also add built-in constants as immutable
+        let constants = data::get_constants();
+        let mut all_immutable_vars: std::collections::HashMap<
+            &str,
+            Option<&parser::types::UserVariable>,
+        > = immutable_vars.iter().map(|(k, v)| (*k, Some(*v))).collect();
+
+        for constant in constants {
+            all_immutable_vars.insert(constant.as_str(), None);
+        }
+
+        if all_immutable_vars.is_empty() {
+            return diagnostics;
+        }
+
+        let assignments = {
+            let mut parser = self.parser.lock().unwrap();
+            parser.find_assignments(text)
+        };
+
+        for (var_name, line, col) in assignments {
+            if let Some(var_info) = all_immutable_vars.get(var_name.as_str()) {
+                let (var_kind, related_info) = if let Some(var) = var_info {
+                    let kind = match var.kind {
+                        parser::types::VariableKind::Define => "define",
+                        parser::types::VariableKind::EnumMember => "enum member",
+                        parser::types::VariableKind::Regular => {
+                            if var.var_type.as_ref().map(|vt| vt.array_dims).unwrap_or(0) > 0 {
+                                "const array"
+                            } else {
+                                "const variable"
+                            }
+                        }
+                    };
+
+                    let info = Some(vec![DiagnosticRelatedInformation {
+                        location: tower_lsp::lsp_types::Location {
+                            uri: Url::parse(uri).unwrap(),
+                            range: var.definition.range,
+                        },
+                        message: "Defined here as immutable".to_string(),
+                    }]);
+
+                    (kind, info)
+                } else {
+                    // Built-in constant
+                    ("built-in constant", None)
+                };
+
+                diagnostics.push(Diagnostic {
+                    range: Range {
+                        start: Position {
+                            line: line as u32,
+                            character: col as u32,
+                        },
+                        end: Position {
+                            line: line as u32,
+                            character: (col + var_name.len()) as u32,
+                        },
+                    },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: Some(NumberOrString::String("immutable-assignment".to_string())),
+                    code_description: None,
+                    source: Some("ersa_lsp".to_string()),
+                    message: format!(
+                        "Cannot assign to {} '{}' because it is immutable",
+                        var_kind, var_name
+                    ),
+                    related_information: related_info,
+                    tags: None,
+                    data: None,
+                });
+            }
+        }
+
+        diagnostics
+    }
+
+    fn check_undefined_variables(&self, uri: &str, text: &str) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        let user_vars = self.user_variables.lock().unwrap();
+        let vars = user_vars.get(uri);
+
+        // Build a set of all defined variable names
+        let mut defined_vars: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+        if let Some(vars) = vars {
+            for var in vars {
+                defined_vars.insert(&var.name);
+            }
+        }
+
+        // Add built-in constants
+        for constant in data::get_constants() {
+            defined_vars.insert(constant.as_str());
+        }
+
+        // Find all variable references (excluding declarations)
+        let var_refs = {
+            let mut parser = self.parser.lock().unwrap();
+            parser.find_variable_references(text)
+        };
+
+        // Also get assignments to check if they're assigning to undefined variables
+        let assignments = {
+            let mut parser = self.parser.lock().unwrap();
+            parser.find_assignments(text)
+        };
+
+        // Check variable references
+        let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for (var_name, line, col) in var_refs {
+            if !defined_vars.contains(var_name.as_str()) && !reported.contains(&var_name) {
+                diagnostics.push(Diagnostic {
+                    range: Range {
+                        start: Position {
+                            line: line as u32,
+                            character: col as u32,
+                        },
+                        end: Position {
+                            line: line as u32,
+                            character: (col + var_name.len()) as u32,
+                        },
+                    },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: Some(NumberOrString::String("undefined-variable".to_string())),
+                    code_description: None,
+                    source: Some("ersa_lsp".to_string()),
+                    message: format!("Undefined variable '{}'", var_name),
+                    related_information: None,
+                    tags: None,
+                    data: None,
+                });
+                reported.insert(var_name);
+            }
+        }
+
+        // Check assignments to undefined variables
+        for (var_name, line, col) in assignments {
+            if !defined_vars.contains(var_name.as_str()) && !reported.contains(&var_name) {
+                diagnostics.push(Diagnostic {
+                    range: Range {
+                        start: Position {
+                            line: line as u32,
+                            character: col as u32,
+                        },
+                        end: Position {
+                            line: line as u32,
+                            character: (col + var_name.len()) as u32,
+                        },
+                    },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: Some(NumberOrString::String("undefined-variable".to_string())),
+                    code_description: None,
+                    source: Some("ersa_lsp".to_string()),
+                    message: format!("Cannot assign to undefined variable '{}'", var_name),
+                    related_information: None,
+                    tags: None,
+                    data: None,
+                });
+                reported.insert(var_name);
+            }
+        }
+
+        diagnostics
+    }
+
+    fn check_undefined_functions(&self, uri: &str, text: &str) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        let user_funcs = self.user_functions.lock().unwrap();
+        let funcs = user_funcs.get(uri);
+
+        // Build a map of all defined function names to their parameter counts
+        let mut defined_funcs: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+
+        if let Some(funcs) = funcs {
+            for func in funcs {
+                defined_funcs.insert(&func.name, func.parameters.len());
+            }
+        }
+
+        // Add built-in functions
+        for builtin in data::get_builtins() {
+            defined_funcs.insert(&builtin.name, builtin.parameters.len());
+        }
+
+        // Find all function calls
+        let func_calls = {
+            let mut parser = self.parser.lock().unwrap();
+            parser.find_function_calls(text)
+        };
+
+        let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for (func_name, line, col, arg_count) in func_calls {
+            if let Some(&expected_param_count) = defined_funcs.get(func_name.as_str()) {
+                // Function exists, check parameter count
+                if arg_count != expected_param_count {
+                    diagnostics.push(Diagnostic {
+                        range: Range {
+                            start: Position {
+                                line: line as u32,
+                                character: col as u32,
+                            },
+                            end: Position {
+                                line: line as u32,
+                                character: (col + func_name.len()) as u32,
+                            },
+                        },
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: Some(NumberOrString::String("wrong-argument-count".to_string())),
+                        code_description: None,
+                        source: Some("ersa_lsp".to_string()),
+                        message: format!(
+                            "Function '{}' expects {} argument{} but got {}",
+                            func_name,
+                            expected_param_count,
+                            if expected_param_count == 1 { "" } else { "s" },
+                            arg_count
+                        ),
+                        related_information: None,
+                        tags: None,
+                        data: None,
+                    });
+                }
+            } else if !reported.contains(&func_name) {
+                // Function doesn't exist
+                diagnostics.push(Diagnostic {
+                    range: Range {
+                        start: Position {
+                            line: line as u32,
+                            character: col as u32,
+                        },
+                        end: Position {
+                            line: line as u32,
+                            character: (col + func_name.len()) as u32,
+                        },
+                    },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: Some(NumberOrString::String("undefined-function".to_string())),
+                    code_description: None,
+                    source: Some("ersa_lsp".to_string()),
+                    message: format!("Undefined function '{}'", func_name),
+                    related_information: None,
+                    tags: None,
+                    data: None,
+                });
+                reported.insert(func_name);
             }
         }
 

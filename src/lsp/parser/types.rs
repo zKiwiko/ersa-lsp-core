@@ -41,6 +41,7 @@ pub struct VarType {
 #[derive(Debug, Clone)]
 pub enum VariableKind {
     Regular,
+    Define,
     EnumMember,
 }
 

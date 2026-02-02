@@ -150,7 +150,7 @@ impl GpcParser {
                 mutability: types::Mutability::Immutable,
                 array_dims: 0,
             }),
-            kind: types::VariableKind::Regular,
+            kind: types::VariableKind::Define,
             definition: Self::node_to_location(node, uri),
             documentation,
         })
@@ -342,6 +342,256 @@ impl GpcParser {
         } else {
             doc_lines.reverse();
             Some(doc_lines.join("\n"))
+        }
+    }
+
+    pub fn find_assignments(&mut self, source: &str) -> Vec<(String, usize, usize)> {
+        let mut assignments = Vec::new();
+
+        let Some(tree) = self.parse(source) else {
+            return assignments;
+        };
+
+        let root = tree.root_node();
+        let mut cursor = root.walk();
+
+        // Find all assignment statements (with semicolon)
+        let assignment_nodes = find_by_kind(&mut cursor, "assignment_statement");
+
+        for node in assignment_nodes {
+            // Skip if node has errors
+            if node.is_error() || node.is_missing() || node.has_error() {
+                continue;
+            }
+
+            // The first child should be the left expression
+            let Some(left) = node.child(0) else {
+                continue;
+            };
+
+            // Skip if it's not an expression
+            if left.kind() != "expression" {
+                continue;
+            }
+
+            // Extract the variable name - could be a simple identifier or array access
+            let var_name = self.extract_assignment_target(left, source);
+
+            if let Some(name) = var_name {
+                assignments.push((
+                    name,
+                    left.start_position().row,
+                    left.start_position().column,
+                ));
+            }
+        }
+
+        // Also find assignment statements without semicolons (in for loops)
+        cursor = root.walk();
+        let assignment_no_semi_nodes = find_by_kind(&mut cursor, "assignment_statement_no_semi");
+
+        for node in assignment_no_semi_nodes {
+            // Skip if node has errors
+            if node.is_error() || node.is_missing() || node.has_error() {
+                continue;
+            }
+
+            // The first child should be the left expression
+            let Some(left) = node.child(0) else {
+                continue;
+            };
+
+            // Skip if it's not an expression
+            if left.kind() != "expression" {
+                continue;
+            }
+
+            // Extract the variable name - could be a simple identifier or array access
+            let var_name = self.extract_assignment_target(left, source);
+
+            if let Some(name) = var_name {
+                assignments.push((
+                    name,
+                    left.start_position().row,
+                    left.start_position().column,
+                ));
+            }
+        }
+
+        assignments
+    }
+
+    fn extract_assignment_target(&self, node: Node, source: &str) -> Option<String> {
+        // If the node is an expression wrapper, unwrap it
+        let target = if node.kind() == "expression" {
+            node.child(0)?
+        } else {
+            node
+        };
+
+        match target.kind() {
+            "identifier" => {
+                // Simple variable: A = 1;
+                target
+                    .utf8_text(source.as_bytes())
+                    .ok()
+                    .map(|s| s.to_string())
+            }
+            "array_access" => {
+                // Array access: B[0] = 1; or C[0][0] = 1;
+                // Get the base expression
+                let mut current = target;
+                while current.kind() == "array_access" {
+                    // The first child of array_access is the expression being indexed
+                    if let Some(object) = current.child(0) {
+                        // If it's an expression wrapper, unwrap it
+                        current = if object.kind() == "expression" {
+                            object.child(0).unwrap_or(object)
+                        } else {
+                            object
+                        };
+                    } else {
+                        break;
+                    }
+                }
+
+                if current.kind() == "identifier" {
+                    current
+                        .utf8_text(source.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn find_function_calls(&mut self, source: &str) -> Vec<(String, usize, usize, usize)> {
+        let mut calls = Vec::new();
+
+        let Some(tree) = self.parse(source) else {
+            return calls;
+        };
+
+        let root = tree.root_node();
+        let mut cursor = root.walk();
+
+        let call_nodes = find_by_kind(&mut cursor, "call_expression");
+
+        for node in call_nodes {
+            if node.is_error() || node.is_missing() || node.has_error() {
+                continue;
+            }
+
+            // First child should be an expression containing the identifier (function name)
+            if let Some(expr_node) = node.child(0) {
+                let func_name_node = if expr_node.kind() == "expression" {
+                    expr_node.child(0)
+                } else if expr_node.kind() == "identifier" {
+                    Some(expr_node)
+                } else {
+                    None
+                };
+
+                if let Some(func_node) = func_name_node {
+                    if func_node.kind() == "identifier" {
+                        if let Ok(func_name) = func_node.utf8_text(source.as_bytes()) {
+                            // Count the arguments
+                            let arg_count = if let Some(arg_list_node) =
+                                get_child_by_kind(node, "argument_list")
+                            {
+                                // Count expression nodes in argument_list
+                                get_children_by_kind(arg_list_node, "expression").len()
+                            } else {
+                                0 // No argument list means no arguments
+                            };
+
+                            calls.push((
+                                func_name.to_string(),
+                                func_node.start_position().row,
+                                func_node.start_position().column,
+                                arg_count,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        calls
+    }
+
+    pub fn find_variable_references(&mut self, source: &str) -> Vec<(String, usize, usize)> {
+        let mut refs = Vec::new();
+
+        let Some(tree) = self.parse(source) else {
+            return refs;
+        };
+
+        let root = tree.root_node();
+
+        // Collect all identifiers that are not in declarations
+        self.collect_variable_refs(root, source, &mut refs);
+
+        refs
+    }
+
+    fn collect_variable_refs(
+        &self,
+        node: Node,
+        source: &str,
+        refs: &mut Vec<(String, usize, usize)>,
+    ) {
+        // Skip declaration contexts
+        match node.kind() {
+            "variable_declarator"
+            | "define_declaration"
+            | "enum_variant"
+            | "function_declaration" => {
+                return;
+            }
+            _ => {}
+        }
+
+        if node.kind() == "identifier" {
+            // Make sure this identifier is not the function name in a call_expression
+            if let Some(parent) = node.parent() {
+                // If parent is expression and grandparent is call_expression, this is a function call
+                if parent.kind() == "expression" {
+                    if let Some(grandparent) = parent.parent() {
+                        if grandparent.kind() == "call_expression" {
+                            // Check if this expression is the first child (the function name)
+                            if grandparent.child(0).map(|c| c.id()) == Some(parent.id()) {
+                                return; // This is a function name, skip it
+                            }
+                        }
+                    }
+                }
+
+                // Skip if it's part of a variable declarator (the name being declared)
+                if parent.kind() == "variable_declarator" {
+                    if let Some(id_node) = get_child_by_kind(parent, "identifier") {
+                        if id_node.id() == node.id() {
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if let Ok(name) = node.utf8_text(source.as_bytes()) {
+                refs.push((
+                    name.to_string(),
+                    node.start_position().row,
+                    node.start_position().column,
+                ));
+            }
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_variable_refs(child, source, refs);
         }
     }
 }
