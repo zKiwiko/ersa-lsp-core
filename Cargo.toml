@@ -1,5 +1,8 @@
 [package]
 name = "ersa_lsp_core"
+license = "GNU General Public License v3.0"
+description = "LSP core for the GPC Scripting language. Intended to be used as a library."
+repository = "https://github.com/zkiwiko/ersa-lsp-core"
 version = "0.1.0"
 edition = "2021"
 
