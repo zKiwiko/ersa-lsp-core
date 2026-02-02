@@ -1,6 +1,8 @@
-## Work in progress...
+# Overview
 
-### Current progress
+Core feature crate for the actual binary : https://github.com/zkiwiko/ersa-lsp
+
+### Current features
 
 - Completion
   - All language constants
@@ -33,6 +35,8 @@
 - Semantic Token Highlighting
 - Folding ranges
 - Code Documents
+- Redefinition Errors
+- Hints on enum members not using UPPER_SNAKE_CASE
 
 ### Use as crate:
 
@@ -45,7 +49,7 @@ async fn main() {
 }
 ```
 
-### Binary
+### development testing binary
 
 ```sh
 cargo build --bin ersa_lsp

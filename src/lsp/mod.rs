@@ -160,10 +160,8 @@ impl LSP {
     fn check_duplicate_definitions(&self, uri: &str) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
-        // Check duplicate functions
         let user_funcs = self.user_functions.lock().unwrap();
         if let Some(funcs) = user_funcs.get(uri) {
-            // Sort functions by position to ensure we identify the first definition correctly
             let mut sorted_funcs: Vec<_> = funcs.iter().collect();
             sorted_funcs.sort_by_key(|f| {
                 (
@@ -176,7 +174,6 @@ impl LSP {
 
             for func in sorted_funcs {
                 if let Some(first_def) = seen_names.get(&func.name) {
-                    // This is a redefinition - error out
                     diagnostics.push(Diagnostic {
                         range: func.definition.range,
                         severity: Some(DiagnosticSeverity::ERROR),
@@ -204,10 +201,8 @@ impl LSP {
             }
         }
 
-        // Check duplicate variables
         let user_vars = self.user_variables.lock().unwrap();
         if let Some(vars) = user_vars.get(uri) {
-            // Sort variables by position to ensure we identify the first definition correctly
             let mut sorted_vars: Vec<_> = vars.iter().collect();
             sorted_vars.sort_by_key(|v| {
                 (
@@ -220,7 +215,6 @@ impl LSP {
 
             for var in sorted_vars {
                 if let Some(first_def) = seen_names.get(&var.name) {
-                    // This is a redefinition - error out
                     diagnostics.push(Diagnostic {
                         range: var.definition.range,
                         severity: Some(DiagnosticSeverity::ERROR),
@@ -254,7 +248,6 @@ impl LSP {
     pub async fn publish_diagnostics(&self, uri: &str, text: &str) {
         let mut diagnostics = Vec::new();
 
-        // Collect syntax errors
         let errors = {
             let mut parser = self.parser.lock().unwrap();
             parser.find_syntax_errors(text)
@@ -281,11 +274,70 @@ impl LSP {
             data: None,
         }));
 
-        // Collect duplicate definition errors
         diagnostics.extend(self.check_duplicate_definitions(uri));
+
+        diagnostics.extend(self.check_enum_case(uri));
 
         self.client
             .publish_diagnostics(Url::parse(uri).unwrap(), diagnostics, None)
             .await;
     }
+
+    fn check_enum_case(&self, uri: &str) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        let user_vars = self.user_variables.lock().unwrap();
+        if let Some(vars) = user_vars.get(uri) {
+            for var in vars {
+                if !is_upper_snake_case(&var.name) && might_be_constant(&var.name) {
+                    diagnostics.push(Diagnostic {
+                        range: var.definition.range,
+                        severity: Some(DiagnosticSeverity::HINT),
+                        code: Some(NumberOrString::String("enum-case".to_string())),
+                        code_description: None,
+                        source: Some("ersa_lsp".to_string()),
+                        message: format!(
+                            "Constant '{}' should use UPPER_SNAKE_CASE naming convention",
+                            var.name
+                        ),
+                        related_information: None,
+                        tags: None,
+                        data: None,
+                    });
+                }
+            }
+        }
+
+        diagnostics
+    }
+}
+
+fn is_upper_snake_case(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+
+    let chars: Vec<char> = name.chars().collect();
+
+    for (i, ch) in chars.iter().enumerate() {
+        if !ch.is_uppercase() && !ch.is_numeric() && *ch != '_' {
+            return false;
+        }
+
+        if *ch == '_' && i > 0 && chars.get(i - 1) == Some(&'_') {
+            return false;
+        }
+    }
+
+    !name.starts_with('_') && !name.ends_with('_')
+}
+
+fn might_be_constant(name: &str) -> bool {
+    let has_uppercase = name.chars().any(|c| c.is_uppercase());
+    let common_constant_prefixes = ["MAX", "MIN", "DEFAULT", "CONST"];
+
+    has_uppercase
+        || common_constant_prefixes
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
 }

@@ -7,6 +7,8 @@ edition = "2021"
 name = "ersa_lsp_core"
 path = "src/lib.rs"
 
+# Strictly for development purposes.
+# Use github.com/zkiwiko/ersa-lsp for production binaries.
 [[bin]]
 name = "ersa_lsp"
 path = "src/bin/main.rs"
