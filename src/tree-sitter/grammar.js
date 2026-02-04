@@ -50,7 +50,12 @@ module.exports = grammar({
         field("body", $.block),
       ),
 
-    parameter_list: ($) => seq($.identifier, repeat(seq(",", $.identifier))),
+    parameter_list: ($) =>
+      seq(
+        optional("int"),
+        $.identifier,
+        repeat(seq(",", optional("int"), $.identifier)),
+      ),
 
     // Combo declarations
     combo_declaration: ($) =>
@@ -87,7 +92,10 @@ module.exports = grammar({
       ),
 
     array_dimension: ($) =>
-      choice(seq("[", "]"), seq("[", $.integer_literal, "]")),
+      choice(
+        seq("[", "]"),
+        seq("[", choice($.integer_literal, $.identifier), "]"),
+      ),
 
     _initializer: ($) => choice($.expression, $.array_initializer),
 
@@ -118,7 +126,9 @@ module.exports = grammar({
     enum_variant: ($) =>
       seq(
         field("name", $.identifier),
-        optional(seq("=", field("value", $.integer_literal))),
+        optional(
+          seq("=", field("value", choice($.integer_literal, $.identifier))),
+        ),
       ),
 
     // Data declarations

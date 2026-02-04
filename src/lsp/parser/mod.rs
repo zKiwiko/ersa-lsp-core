@@ -239,12 +239,29 @@ impl GpcParser {
             })
             .unwrap_or_default();
 
+        // Extract the body range to track function scope
+        let body_range = get_child_by_kind(node, "block").map(|body_node| {
+            let start = body_node.start_position();
+            let end = body_node.end_position();
+            tower_lsp::lsp_types::Range {
+                start: tower_lsp::lsp_types::Position {
+                    line: start.row as u32,
+                    character: start.column as u32,
+                },
+                end: tower_lsp::lsp_types::Position {
+                    line: end.row as u32,
+                    character: end.column as u32,
+                },
+            }
+        });
+
         let documentation = Self::extract_documentation_before_node(node, source);
 
         Some(types::UserFunction {
             name,
             parameters,
             definition: Self::node_to_location(node, uri),
+            body_range,
             documentation,
         })
     }

@@ -286,6 +286,8 @@ impl LSP {
 
         diagnostics.extend(self.check_immutable_assignments(uri, text));
 
+        diagnostics.extend(self.check_parameter_shadowing(uri));
+
         diagnostics.extend(self.check_undefined_variables(uri, text));
 
         diagnostics.extend(self.check_undefined_functions(uri, text));
@@ -479,7 +481,6 @@ impl LSP {
             .map(|v| (v.name.as_str(), v))
             .collect();
 
-        // Also add built-in constants as immutable
         let constants = data::get_constants();
         let mut all_immutable_vars: std::collections::HashMap<
             &str,
@@ -524,7 +525,6 @@ impl LSP {
 
                     (kind, info)
                 } else {
-                    // Built-in constant
                     ("built-in constant", None)
                 };
 
@@ -557,13 +557,68 @@ impl LSP {
         diagnostics
     }
 
+    fn check_parameter_shadowing(&self, uri: &str) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        let user_funcs = self.user_functions.lock().unwrap();
+        let user_vars = self.user_variables.lock().unwrap();
+
+        let Some(funcs) = user_funcs.get(uri) else {
+            return diagnostics;
+        };
+
+        let Some(vars) = user_vars.get(uri) else {
+            return diagnostics;
+        };
+
+        let global_vars: std::collections::HashMap<&str, &parser::types::UserVariable> =
+            vars.iter().map(|v| (v.name.as_str(), v)).collect();
+
+        for func in funcs {
+            for param_name in &func.parameters {
+                if let Some(global_var) = global_vars.get(param_name.as_str()) {
+                    let symbol_type = match global_var.kind {
+                        parser::types::VariableKind::EnumMember => "enum member",
+                        parser::types::VariableKind::Define => "define",
+                        parser::types::VariableKind::Regular => "variable",
+                    };
+
+                    diagnostics.push(Diagnostic {
+                        range: func.definition.range,
+                        severity: Some(DiagnosticSeverity::WARNING),
+                        code: Some(NumberOrString::String("parameter-shadowing".to_string())),
+                        code_description: None,
+                        source: Some("ersa_lsp".to_string()),
+                        message: format!(
+                            "Parameter '{}' is shadowing the variable {}, and wont be used.",
+                            param_name, symbol_type
+                        ),
+                        related_information: Some(vec![DiagnosticRelatedInformation {
+                            location: Location {
+                                uri: Url::parse(&global_var.definition.uri).unwrap(),
+                                range: global_var.definition.range,
+                            },
+                            message: format!(
+                                "Global {} '{}' declared here - this will be used in the function",
+                                symbol_type, param_name
+                            ),
+                        }]),
+                        tags: None,
+                        data: None,
+                    });
+                }
+            }
+        }
+
+        diagnostics
+    }
+
     fn check_undefined_variables(&self, uri: &str, text: &str) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
         let user_vars = self.user_variables.lock().unwrap();
         let vars = user_vars.get(uri);
 
-        // Build a set of all defined variable names
         let mut defined_vars: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
         if let Some(vars) = vars {
@@ -572,24 +627,20 @@ impl LSP {
             }
         }
 
-        // Add built-in constants
         for constant in data::get_constants() {
             defined_vars.insert(constant.as_str());
         }
 
-        // Find all variable references (excluding declarations)
         let var_refs = {
             let mut parser = self.parser.lock().unwrap();
             parser.find_variable_references(text)
         };
 
-        // Also get assignments to check if they're assigning to undefined variables
         let assignments = {
             let mut parser = self.parser.lock().unwrap();
             parser.find_assignments(text)
         };
 
-        // Check variable references
         let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for (var_name, line, col) in var_refs {
@@ -618,7 +669,6 @@ impl LSP {
             }
         }
 
-        // Check assignments to undefined variables
         for (var_name, line, col) in assignments {
             if !defined_vars.contains(var_name.as_str()) && !reported.contains(&var_name) {
                 diagnostics.push(Diagnostic {
@@ -654,7 +704,6 @@ impl LSP {
         let user_funcs = self.user_functions.lock().unwrap();
         let funcs = user_funcs.get(uri);
 
-        // Build a map of all defined function names to their parameter counts
         let mut defined_funcs: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
 
@@ -664,12 +713,10 @@ impl LSP {
             }
         }
 
-        // Add built-in functions
         for builtin in data::get_builtins() {
             defined_funcs.insert(&builtin.name, builtin.parameters.len());
         }
 
-        // Find all function calls
         let func_calls = {
             let mut parser = self.parser.lock().unwrap();
             parser.find_function_calls(text)
@@ -679,7 +726,6 @@ impl LSP {
 
         for (func_name, line, col, arg_count) in func_calls {
             if let Some(&expected_param_count) = defined_funcs.get(func_name.as_str()) {
-                // Function exists, check parameter count
                 if arg_count != expected_param_count {
                     diagnostics.push(Diagnostic {
                         range: Range {
@@ -709,7 +755,6 @@ impl LSP {
                     });
                 }
             } else if !reported.contains(&func_name) {
-                // Function doesn't exist
                 diagnostics.push(Diagnostic {
                     range: Range {
                         start: Position {

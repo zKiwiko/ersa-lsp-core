@@ -9,6 +9,7 @@ pub struct UserFunction {
     pub name: String,
     pub parameters: Vec<String>,
     pub definition: Location,
+    pub body_range: Option<tower_lsp::lsp_types::Range>,
     pub documentation: Option<String>,
 }
 
