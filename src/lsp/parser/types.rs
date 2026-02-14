@@ -14,6 +14,16 @@ pub struct UserFunction {
 }
 
 #[derive(Debug, Clone)]
+pub struct UserMacro {
+    pub name: String,
+    pub parameters: Vec<String>,
+    pub definition: Location,
+    pub body_range: Option<tower_lsp::lsp_types::Range>,
+    pub documentation: Option<String>,
+    pub has_placeholder: bool,
+}
+
+#[derive(Debug, Clone)]
 pub enum DataTypes {
     Int8,
     Int16,

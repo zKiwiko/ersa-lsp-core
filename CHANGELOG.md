@@ -1,3 +1,11 @@
+## 0.3.0
+
+### Added
+
+- Experimental language features. Visit the [documentation site](https://zkiwiko.github.io/ersa/) for more info.
+  - File imports/inclusions with `import [path]`
+  - Rust-like macro definitions and uses.
+
 ## 0.2.0 - Feb 2 2026
 
 ### Fixed

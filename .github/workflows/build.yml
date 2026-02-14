@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'
+      - "*"
 
 env:
   CARGO_TERM_COLOR: always
@@ -33,11 +33,11 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: ersa_lsp
-            asset_name: ersa-lsp-core-linux-amd64
+            asset_name: ersa_lsp
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: ersa_lsp.exe
-            asset_name: ersa-lsp-core-windows-amd64.exe
+            asset_name: ersa_lsp.exe
 
     runs-on: ${{ matrix.os }}
 

@@ -5,6 +5,8 @@ module.exports = grammar({
 
   word: ($) => $.identifier,
 
+  conflicts: ($) => [[$._statement, $.expression]],
+
   rules: {
     source_file: ($) => repeat($._global_declaration),
 
@@ -21,7 +23,65 @@ module.exports = grammar({
         $.data_declaration,
         $.remap_declaration,
         $.unmap_declaration,
+
+        // Experimental features
+        $.macro_declaration,
+        $.macro_call,
+        $.import,
       ),
+
+    // import foo/bar; (infer .gpc ending if not present)
+    // import "foo/bar.gpc";
+    import: ($) =>
+      seq(
+        "import",
+        field(
+          "path",
+          choice(
+            $.import_identifier,
+            seq('"', $.import_identifier, optional(".gpc"), '"'),
+          ),
+        ),
+        ";",
+      ),
+
+    // define! NAME (<PARAMS>) { ... }
+    macro_declaration: ($) =>
+      seq(
+        "define!",
+        field("name", $.identifier),
+        "(",
+        optional($.parameter_list),
+        ")",
+        field("body", $.block),
+      ),
+
+    // NAME!(ARGS) or NAME!(ARGS) { ...}
+    macro_call: ($) =>
+      prec.right(
+        15,
+        seq(
+          field("name", $.identifier),
+          "(",
+          optional($.argument_list),
+          ")",
+          "!",
+          optional(
+            field(
+              "body",
+              seq(
+                "{",
+                optional(choice(repeat1($._statement), $.expression)),
+                "}",
+              ),
+            ),
+          ),
+        ),
+      ),
+
+    // Macro body can contain statements or just an expression
+    macro_body: ($) =>
+      seq("{", optional(choice(repeat1($._statement), $.expression)), "}"),
 
     remap_declaration: ($) =>
       seq(
@@ -139,6 +199,8 @@ module.exports = grammar({
     _statement: ($) =>
       choice(
         $.block,
+        $.macro_call,
+        $.call_statement,
         $.expression_statement,
         $.if_statement,
         $.while_statement,
@@ -149,12 +211,24 @@ module.exports = grammar({
         $.break_statement,
         $.continue_statement,
         $.assignment_statement,
+        $.placeholder,
         ";", // empty statement
       ),
 
     block: ($) => seq("{", repeat($._statement), "}"),
 
     expression_statement: ($) => seq($.expression, ";"),
+
+    call_statement: ($) =>
+      seq(
+        field("function", $.identifier),
+        "(",
+        optional($.argument_list),
+        ")",
+        ";",
+      ),
+
+    placeholder: ($) => "%0",
 
     assignment_statement: ($) =>
       seq(
@@ -251,11 +325,20 @@ module.exports = grammar({
         $.unary_expression,
         $.postfix_expression,
         $.call_expression,
+        $.macro_call,
         $.array_access,
-        $.identifier,
-        $.integer_literal,
-        $.string_literal,
-        $.parenthesized_expression,
+        $._primary_expression,
+      ),
+
+    _primary_expression: ($) =>
+      prec(
+        -1,
+        choice(
+          $.identifier,
+          $.integer_literal,
+          $.string_literal,
+          $.parenthesized_expression,
+        ),
       ),
 
     expression_list: ($) => seq($.expression, repeat(seq(",", $.expression))),
@@ -301,7 +384,7 @@ module.exports = grammar({
       ),
 
     postfix_expression: ($) =>
-      prec.left(
+      prec(
         13,
         seq(
           field("operand", $.expression),
@@ -310,7 +393,7 @@ module.exports = grammar({
       ),
 
     call_expression: ($) =>
-      prec.left(
+      prec(
         14,
         seq(
           field("function", $.expression),
@@ -323,7 +406,7 @@ module.exports = grammar({
     argument_list: ($) => seq($.expression, repeat(seq(",", $.expression))),
 
     array_access: ($) =>
-      prec.left(
+      prec(
         14,
         seq(
           field("array", $.expression),
@@ -350,6 +433,7 @@ module.exports = grammar({
 
     // Literals and identifiers
     identifier: ($) => /[a-zA-Z_][a-zA-Z0-9_]*/,
+    import_identifier: ($) => /[a-zA-Z0-9_\/]+/,
 
     integer_literal: ($) => choice(/0[xX][0-9a-fA-F]+/, /[0-9]+/),
 

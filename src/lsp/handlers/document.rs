@@ -13,7 +13,9 @@ impl LSP {
             .insert(uri.clone(), text.clone());
 
         self.update_user_functions(&uri, &text).await;
+        self.update_user_macros(&uri, &text).await;
         self.update_user_variables(&uri, &text).await;
+        self.resolve_imports(&uri, &text).await;
         self.publish_diagnostics(&uri, &text).await;
 
         self.client
@@ -44,9 +46,14 @@ impl LSP {
             let text_clone = change.text.clone();
             let parser = self.parser.clone();
             let user_functions = self.user_functions.clone();
+            let user_macros = self.user_macros.clone();
             let user_variables = self.user_variables.clone();
+            let imported_functions = self.imported_functions.clone();
+            let imported_macros = self.imported_macros.clone();
+            let imported_variables = self.imported_variables.clone();
             let last_edit_times = self.last_edit_times.clone();
             let client = self.client.clone();
+            let features = self.features.clone();
 
             tokio::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
@@ -66,6 +73,17 @@ impl LSP {
                         .unwrap()
                         .insert(uri_clone.clone(), functions);
 
+                    let macros = if features.macros {
+                        let mut parser = parser.lock().unwrap();
+                        parser.extract_user_macros(&text_clone, &uri_clone)
+                    } else {
+                        Vec::new()
+                    };
+                    user_macros
+                        .lock()
+                        .unwrap()
+                        .insert(uri_clone.clone(), macros);
+
                     let variables = {
                         let mut parser = parser.lock().unwrap();
                         parser.extract_user_variables(&text_clone, &uri_clone)
@@ -74,6 +92,69 @@ impl LSP {
                         .lock()
                         .unwrap()
                         .insert(uri_clone.clone(), variables);
+
+                    // Resolve imports
+                    if features.imports {
+                        let import_paths = {
+                            let mut parser = parser.lock().unwrap();
+                            parser.extract_imports(&text_clone)
+                        };
+
+                        let mut all_imported_functions = Vec::new();
+                        let mut all_imported_macros = Vec::new();
+                        let mut all_imported_variables = Vec::new();
+
+                        for import_path in import_paths {
+                            // Resolve import path
+                            if let Ok(current_url) = tower_lsp::lsp_types::Url::parse(&uri_clone) {
+                                if let Ok(current_path) = current_url.to_file_path() {
+                                    if let Some(current_dir) = current_path.parent() {
+                                        let resolved = current_dir.join(&import_path);
+                                        if let Some(resolved_str) = resolved.to_str() {
+                                            if let Ok(imported_text) = std::fs::read_to_string(resolved_str) {
+                                                let resolved_uri = format!("file://{}", resolved_str);
+                                                
+                                                let functions = {
+                                                    let mut parser = parser.lock().unwrap();
+                                                    parser.extract_user_functions(&imported_text, &resolved_uri)
+                                                };
+                                                all_imported_functions.extend(functions);
+
+                                                if features.macros {
+                                                    let macros = {
+                                                        let mut parser = parser.lock().unwrap();
+                                                        parser.extract_user_macros(&imported_text, &resolved_uri)
+                                                    };
+                                                    all_imported_macros.extend(macros);
+                                                }
+
+                                                let variables = {
+                                                    let mut parser = parser.lock().unwrap();
+                                                    parser.extract_user_variables(&imported_text, &resolved_uri)
+                                                };
+                                                all_imported_variables.extend(variables);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        imported_functions
+                            .lock()
+                            .unwrap()
+                            .insert(uri_clone.clone(), all_imported_functions);
+                        
+                        imported_macros
+                            .lock()
+                            .unwrap()
+                            .insert(uri_clone.clone(), all_imported_macros);
+                        
+                        imported_variables
+                            .lock()
+                            .unwrap()
+                            .insert(uri_clone.clone(), all_imported_variables);
+                    }
 
                     // Publish diagnostics after updating symbols
                     let mut diagnostics = Vec::new();
@@ -196,7 +277,9 @@ impl LSP {
         let text = self.documents.lock().unwrap().get(&uri).cloned();
         if let Some(text) = text {
             self.update_user_functions(&uri.to_string(), &text).await;
+            self.update_user_macros(&uri.to_string(), &text).await;
             self.update_user_variables(&uri.to_string(), &text).await;
+            self.resolve_imports(&uri.to_string(), &text).await;
             self.publish_diagnostics(&uri, &text).await;
         }
 

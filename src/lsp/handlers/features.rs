@@ -132,6 +132,21 @@ impl LSP {
             }
         }
 
+        let user_macros = self.user_macros.lock().unwrap();
+        if self.features.macros {
+            if let Some(mac) = user_macros
+                .get(&uri_str)
+                .and_then(|macros| macros.iter().find(|m| m.name == word))
+            {
+                if let Ok(mac_uri) = Url::parse(&mac.definition.uri) {
+                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: mac_uri,
+                        range: mac.definition.range,
+                    })));
+                }
+            }
+        }
+
         let user_vars = self.user_variables.lock().unwrap();
         if let Some(var) = user_vars
             .get(&uri_str)
@@ -142,6 +157,50 @@ impl LSP {
                     uri: var_uri,
                     range: var.definition.range,
                 })));
+            }
+        }
+
+        // Check imported symbols
+        if self.features.imports {
+            let imported_funcs = self.imported_functions.lock().unwrap();
+            if let Some(func) = imported_funcs
+                .get(&uri_str)
+                .and_then(|funcs| funcs.iter().find(|f| f.name == word))
+            {
+                if let Ok(func_uri) = Url::parse(&func.definition.uri) {
+                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: func_uri,
+                        range: func.definition.range,
+                    })));
+                }
+            }
+
+            if self.features.macros {
+                let imported_macros = self.imported_macros.lock().unwrap();
+                if let Some(mac) = imported_macros
+                    .get(&uri_str)
+                    .and_then(|macros| macros.iter().find(|m| m.name == word))
+                {
+                    if let Ok(mac_uri) = Url::parse(&mac.definition.uri) {
+                        return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                            uri: mac_uri,
+                            range: mac.definition.range,
+                        })));
+                    }
+                }
+            }
+
+            let imported_vars = self.imported_variables.lock().unwrap();
+            if let Some(var) = imported_vars
+                .get(&uri_str)
+                .and_then(|vars| vars.iter().find(|v| v.name == word))
+            {
+                if let Ok(var_uri) = Url::parse(&var.definition.uri) {
+                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: var_uri,
+                        range: var.definition.range,
+                    })));
+                }
             }
         }
 
@@ -277,6 +336,39 @@ impl LSP {
                     }
                 }
 
+                if items.len() < 50 && self.features.macros {
+                    let user_macros = self.user_macros.lock().unwrap();
+                    if let Some(macros) = user_macros.get(&uri.to_string()) {
+                        for mac in macros {
+                            if mac.name.starts_with(prefix) {
+                                let params_str = mac.parameters.join(", ");
+                                let documentation = mac
+                                    .documentation
+                                    .as_ref()
+                                    .map(|doc| Documentation::String(doc.clone()))
+                                    .or_else(|| {
+                                        Some(Documentation::String(
+                                            "User-defined macro".to_string(),
+                                        ))
+                                    });
+
+                                items.push(CompletionItem {
+                                    label: mac.name.clone(),
+                                    kind: Some(CompletionItemKind::FUNCTION),
+                                    detail: Some(format!("define! {}({})", mac.name, params_str)),
+                                    documentation,
+                                    insert_text: Some(format!("{}(${{1}})", mac.name)),
+                                    insert_text_format: Some(InsertTextFormat::SNIPPET),
+                                    ..Default::default()
+                                });
+                            }
+                            if items.len() >= 50 {
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 if items.len() < 50 {
                     let user_vars = self.user_variables.lock().unwrap();
                     if let Some(vars) = user_vars.get(&uri.to_string()) {
@@ -304,6 +396,112 @@ impl LSP {
                                     label: var.name.clone(),
                                     kind: Some(kind),
                                     detail: Some(detail),
+                                    documentation,
+                                    ..Default::default()
+                                });
+                            }
+                            if items.len() >= 50 {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Add imported functions
+                if items.len() < 50 && self.features.imports {
+                    let imported_funcs = self.imported_functions.lock().unwrap();
+                    if let Some(funcs) = imported_funcs.get(&uri.to_string()) {
+                        for func in funcs {
+                            if func.name.starts_with(prefix) {
+                                let params_str = func.parameters.join(", ");
+                                let documentation = func
+                                    .documentation
+                                    .as_ref()
+                                    .map(|doc| Documentation::String(doc.clone()))
+                                    .or_else(|| {
+                                        Some(Documentation::String(
+                                            "Imported function".to_string(),
+                                        ))
+                                    });
+
+                                items.push(CompletionItem {
+                                    label: func.name.clone(),
+                                    kind: Some(CompletionItemKind::FUNCTION),
+                                    detail: Some(format!("{}({}) (imported)", func.name, params_str)),
+                                    documentation,
+                                    insert_text: Some(format!("{}(${{1}})", func.name)),
+                                    insert_text_format: Some(InsertTextFormat::SNIPPET),
+                                    ..Default::default()
+                                });
+                            }
+                            if items.len() >= 50 {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Add imported macros
+                if items.len() < 50 && self.features.imports && self.features.macros {
+                    let imported_macros = self.imported_macros.lock().unwrap();
+                    if let Some(macros) = imported_macros.get(&uri.to_string()) {
+                        for mac in macros {
+                            if mac.name.starts_with(prefix) {
+                                let params_str = mac.parameters.join(", ");
+                                let documentation = mac
+                                    .documentation
+                                    .as_ref()
+                                    .map(|doc| Documentation::String(doc.clone()))
+                                    .or_else(|| {
+                                        Some(Documentation::String(
+                                            "Imported macro".to_string(),
+                                        ))
+                                    });
+
+                                items.push(CompletionItem {
+                                    label: mac.name.clone(),
+                                    kind: Some(CompletionItemKind::FUNCTION),
+                                    detail: Some(format!("define! {}({}) (imported)", mac.name, params_str)),
+                                    documentation,
+                                    insert_text: Some(format!("{}(${{1}})", mac.name)),
+                                    insert_text_format: Some(InsertTextFormat::SNIPPET),
+                                    ..Default::default()
+                                });
+                            }
+                            if items.len() >= 50 {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Add imported variables
+                if items.len() < 50 && self.features.imports {
+                    let imported_vars = self.imported_variables.lock().unwrap();
+                    if let Some(vars) = imported_vars.get(&uri.to_string()) {
+                        for var in vars {
+                            if var.name.starts_with(prefix) {
+                                let (kind, detail_str) = match var.kind {
+                                    parser::types::VariableKind::EnumMember => {
+                                        (CompletionItemKind::ENUM_MEMBER, "Enum member")
+                                    }
+                                    parser::types::VariableKind::Define => {
+                                        (CompletionItemKind::CONSTANT, "Define")
+                                    }
+                                    parser::types::VariableKind::Regular => {
+                                        (CompletionItemKind::VARIABLE, "Variable")
+                                    }
+                                };
+
+                                let documentation = var
+                                    .documentation
+                                    .as_ref()
+                                    .map(|doc| Documentation::String(doc.clone()));
+
+                                items.push(CompletionItem {
+                                    label: var.name.clone(),
+                                    kind: Some(kind),
+                                    detail: Some(format!("{} (imported)", detail_str)),
                                     documentation,
                                     ..Default::default()
                                 });
