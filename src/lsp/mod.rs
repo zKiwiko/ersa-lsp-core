@@ -15,6 +15,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 pub struct Features {
     pub imports: bool,
     pub macros: bool,
+    pub main_file: bool,
 }
 
 impl Features {
@@ -22,6 +23,7 @@ impl Features {
         Features {
             imports: false,
             macros: false,
+            main_file: false,
         }
     }
 
@@ -29,6 +31,7 @@ impl Features {
         Features {
             imports: true,
             macros: true,
+            main_file: true,
         }
     }
 
@@ -39,6 +42,7 @@ impl Features {
             match feature.to_lowercase().as_str() {
                 "imports" => features.imports = true,
                 "macros" => features.macros = true,
+                "main-file" | "main_file" => features.main_file = true,
                 "all" => return Features::all(),
                 _ => {}
             }
@@ -58,6 +62,11 @@ pub struct LSP {
     imported_functions: Arc<Mutex<HashMap<String, Vec<parser::types::UserFunction>>>>,
     imported_macros: Arc<Mutex<HashMap<String, Vec<parser::types::UserMacro>>>>,
     imported_variables: Arc<Mutex<HashMap<String, Vec<parser::types::UserVariable>>>>,
+    main_file_functions: Arc<Mutex<HashMap<String, Vec<parser::types::UserFunction>>>>,
+    main_file_macros: Arc<Mutex<HashMap<String, Vec<parser::types::UserMacro>>>>,
+    main_file_variables: Arc<Mutex<HashMap<String, Vec<parser::types::UserVariable>>>>,
+    main_file_cache: Arc<Mutex<HashMap<String, Option<String>>>>,
+    workspace_root: Arc<Mutex<Option<String>>>,
     last_edit_times: Arc<Mutex<HashMap<String, SystemTime>>>,
     features: Features,
 }
@@ -165,6 +174,11 @@ impl LSP {
             imported_functions: Arc::new(Mutex::new(HashMap::new())),
             imported_macros: Arc::new(Mutex::new(HashMap::new())),
             imported_variables: Arc::new(Mutex::new(HashMap::new())),
+            main_file_functions: Arc::new(Mutex::new(HashMap::new())),
+            main_file_macros: Arc::new(Mutex::new(HashMap::new())),
+            main_file_variables: Arc::new(Mutex::new(HashMap::new())),
+            main_file_cache: Arc::new(Mutex::new(HashMap::new())),
+            workspace_root: Arc::new(Mutex::new(None)),
             last_edit_times: Arc::new(Mutex::new(HashMap::new())),
             features,
         }
@@ -176,6 +190,17 @@ impl LSP {
 
         let (service, socket) = LspService::new(|client| LSP::new(client, features.clone()));
         Server::new(stdin, stdout, socket).serve(service).await;
+    }
+
+    /// Start the LSP server using the provided async streams instead of stdin/stdout.
+    /// This allows embedding the server in another Rust application.
+    pub async fn start_with_streams<I, O>(features: Features, input: I, output: O)
+    where
+        I: tokio::io::AsyncRead + Unpin + Send + 'static,
+        O: tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let (service, socket) = LspService::new(|client| LSP::new(client, features.clone()));
+        Server::new(input, output, socket).serve(service).await;
     }
 
     pub async fn log(&self, message: &str) {
@@ -297,6 +322,195 @@ impl LSP {
 
         // Convert to string and check if it exists
         resolved.to_str().map(|s| s.to_string())
+    }
+
+    /// Walk upward from the file's directory looking for `main.gpc`.
+    /// Stops at workspace root (if set) or filesystem root.
+    /// Returns the filesystem path to main.gpc if found.
+    fn detect_main_file(&self, uri: &str) -> Option<String> {
+        let current_url = Url::parse(uri).ok()?;
+        let current_path = current_url.to_file_path().ok()?;
+        let mut current_dir = current_path.parent()?.to_path_buf();
+
+        let workspace_root = self.workspace_root.lock().unwrap().clone();
+        let workspace_path = workspace_root
+            .as_ref()
+            .and_then(|root| Url::parse(root).ok())
+            .and_then(|url| url.to_file_path().ok());
+
+        loop {
+            let dir_key = current_dir.to_string_lossy().to_string();
+
+            // Check cache
+            {
+                let cache = self.main_file_cache.lock().unwrap();
+                if let Some(cached) = cache.get(&dir_key) {
+                    return cached.clone();
+                }
+            }
+
+            // Look for main.gpc in current directory
+            let main_gpc = current_dir.join("main.gpc");
+            if main_gpc.exists() {
+                let main_path = main_gpc.to_string_lossy().to_string();
+                self.main_file_cache
+                    .lock()
+                    .unwrap()
+                    .insert(dir_key, Some(main_path.clone()));
+                return Some(main_path);
+            }
+
+            // Stop at workspace root
+            if let Some(ref ws_path) = workspace_path {
+                if current_dir == *ws_path {
+                    break;
+                }
+            }
+
+            // Move to parent
+            let parent = current_dir.parent()?;
+            if parent == current_dir {
+                break; // Reached filesystem root
+            }
+            current_dir = parent.to_path_buf();
+        }
+
+        // Cache negative result for the original directory
+        let original_dir = current_path.parent()?.to_string_lossy().to_string();
+        self.main_file_cache
+            .lock()
+            .unwrap()
+            .insert(original_dir, None);
+        None
+    }
+
+    /// Resolve symbols from the detected main.gpc file and its imports.
+    /// Stores them in main_file_functions/macros/variables keyed by the requesting URI.
+    pub async fn resolve_main_file_symbols(&self, uri: &str) {
+        if !self.features.main_file {
+            return;
+        }
+
+        let main_file_path = match self.detect_main_file(uri) {
+            Some(path) => path,
+            None => {
+                // Clear any previously cached main file symbols for this URI
+                self.main_file_functions.lock().unwrap().remove(uri);
+                self.main_file_macros.lock().unwrap().remove(uri);
+                self.main_file_variables.lock().unwrap().remove(uri);
+                return;
+            }
+        };
+
+        // Don't resolve main file symbols if we ARE the main file
+        let current_url = Url::parse(uri).ok();
+        let current_path = current_url.and_then(|u| u.to_file_path().ok());
+        if let Some(ref cp) = current_path {
+            if cp.to_string_lossy() == main_file_path {
+                self.main_file_functions.lock().unwrap().remove(uri);
+                self.main_file_macros.lock().unwrap().remove(uri);
+                self.main_file_variables.lock().unwrap().remove(uri);
+                return;
+            }
+        }
+
+        let mut all_functions = Vec::new();
+        let mut all_macros = Vec::new();
+        let mut all_variables = Vec::new();
+
+        // Parse main.gpc itself
+        let main_uri = format!("file://{}", main_file_path);
+        if let Ok(main_text) = tokio::fs::read_to_string(&main_file_path).await {
+            let functions = {
+                let mut parser = self.parser.lock().unwrap();
+                parser.extract_user_functions(&main_text, &main_uri)
+            };
+            all_functions.extend(functions);
+
+            if self.features.macros {
+                let macros = {
+                    let mut parser = self.parser.lock().unwrap();
+                    parser.extract_user_macros(&main_text, &main_uri)
+                };
+                all_macros.extend(macros);
+            }
+
+            let variables = {
+                let mut parser = self.parser.lock().unwrap();
+                parser.extract_user_variables(&main_text, &main_uri)
+            };
+            all_variables.extend(variables);
+
+            // Follow imports from main.gpc recursively
+            let import_paths = {
+                let mut parser = self.parser.lock().unwrap();
+                parser.extract_imports(&main_text)
+            };
+
+            let main_dir = std::path::Path::new(&main_file_path).parent();
+            if let Some(main_dir) = main_dir {
+                for import_path in import_paths {
+                    let resolved = main_dir.join(&import_path);
+                    if let Some(resolved_str) = resolved.to_str() {
+                        // Skip if this import points to the file we're editing
+                        if let Some(ref cp) = current_path {
+                            if resolved == *cp {
+                                continue;
+                            }
+                        }
+
+                        if let Ok(imported_text) = tokio::fs::read_to_string(resolved_str).await {
+                            let resolved_uri = format!("file://{}", resolved_str);
+
+                            let functions = {
+                                let mut parser = self.parser.lock().unwrap();
+                                parser.extract_user_functions(&imported_text, &resolved_uri)
+                            };
+                            all_functions.extend(functions);
+
+                            if self.features.macros {
+                                let macros = {
+                                    let mut parser = self.parser.lock().unwrap();
+                                    parser.extract_user_macros(&imported_text, &resolved_uri)
+                                };
+                                all_macros.extend(macros);
+                            }
+
+                            let variables = {
+                                let mut parser = self.parser.lock().unwrap();
+                                parser.extract_user_variables(&imported_text, &resolved_uri)
+                            };
+                            all_variables.extend(variables);
+                        }
+                    }
+                }
+            }
+
+            self.log(&format!(
+                "Main file resolved for {}: {} ({} functions, {} macros, {} variables)",
+                uri,
+                main_file_path,
+                all_functions.len(),
+                all_macros.len(),
+                all_variables.len()
+            ))
+            .await;
+        }
+
+        self.main_file_functions
+            .lock()
+            .unwrap()
+            .insert(uri.to_string(), all_functions);
+
+        self.main_file_macros
+            .lock()
+            .unwrap()
+            .insert(uri.to_string(), all_macros);
+
+        self.main_file_variables
+            .lock()
+            .unwrap()
+            .insert(uri.to_string(), all_variables);
     }
 
     fn check_duplicate_definitions(&self, uri: &str) -> Vec<Diagnostic> {
@@ -861,6 +1075,21 @@ impl LSP {
             }
         }
 
+        // Lock main file variables early if main_file feature is enabled
+        let main_vars_guard = if self.features.main_file {
+            Some(self.main_file_variables.lock().unwrap())
+        } else {
+            None
+        };
+
+        if let Some(ref main_vars_guard) = main_vars_guard {
+            if let Some(vars) = main_vars_guard.get(uri) {
+                for var in vars {
+                    defined_vars.insert(&var.name);
+                }
+            }
+        }
+
         for constant in data::get_constants() {
             defined_vars.insert(constant.as_str());
         }
@@ -963,6 +1192,21 @@ impl LSP {
             }
         }
 
+        // Also check main file functions
+        let main_funcs_guard = if self.features.main_file {
+            Some(self.main_file_functions.lock().unwrap())
+        } else {
+            None
+        };
+
+        if let Some(ref main_funcs_guard) = main_funcs_guard {
+            if let Some(funcs) = main_funcs_guard.get(uri) {
+                for func in funcs {
+                    defined_funcs.insert(&func.name, func.parameters.len());
+                }
+            }
+        }
+
         for builtin in data::get_builtins() {
             defined_funcs.insert(&builtin.name, builtin.parameters.len());
         }
@@ -1041,6 +1285,12 @@ impl LSP {
         let imported_macros = self.imported_macros.lock().unwrap();
         let imported = imported_macros.get(uri);
 
+        let main_macros_guard = if self.features.main_file {
+            Some(self.main_file_macros.lock().unwrap())
+        } else {
+            None
+        };
+
         let mut defined_macros: std::collections::HashMap<&str, bool> =
             std::collections::HashMap::new();
 
@@ -1053,6 +1303,14 @@ impl LSP {
         if let Some(imported) = imported {
             for macro_def in imported {
                 defined_macros.insert(&macro_def.name, macro_def.has_placeholder);
+            }
+        }
+
+        if let Some(ref main_macros_guard) = main_macros_guard {
+            if let Some(main_macros) = main_macros_guard.get(uri) {
+                for macro_def in main_macros {
+                    defined_macros.insert(&macro_def.name, macro_def.has_placeholder);
+                }
             }
         }
 

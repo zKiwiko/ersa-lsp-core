@@ -4,10 +4,26 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
 impl LSP {
-    pub async fn handle_initialize(&self, _params: InitializeParams) -> Result<InitializeResult> {
+    pub async fn handle_initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         self.client
             .log_message(MessageType::INFO, "Ersa LSP initializing...")
             .await;
+
+        // Extract workspace root from initialization params
+        let workspace_root = params
+            .workspace_folders
+            .as_ref()
+            .and_then(|folders| folders.first())
+            .map(|folder| folder.uri.to_string())
+            .or_else(|| params.root_uri.map(|uri| uri.to_string()));
+
+        if let Some(ref root) = workspace_root {
+            self.client
+                .log_message(MessageType::INFO, format!("Workspace root: {}", root))
+                .await;
+        }
+
+        *self.workspace_root.lock().unwrap() = workspace_root;
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
