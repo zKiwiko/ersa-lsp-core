@@ -204,50 +204,6 @@ impl LSP {
             }
         }
 
-        // Check main file symbols
-        if self.features.main_file {
-            let main_funcs = self.main_file_functions.lock().unwrap();
-            if let Some(func) = main_funcs
-                .get(&uri_str)
-                .and_then(|funcs| funcs.iter().find(|f| f.name == word))
-            {
-                if let Ok(func_uri) = Url::parse(&func.definition.uri) {
-                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
-                        uri: func_uri,
-                        range: func.definition.range,
-                    })));
-                }
-            }
-
-            if self.features.macros {
-                let main_macros = self.main_file_macros.lock().unwrap();
-                if let Some(mac) = main_macros
-                    .get(&uri_str)
-                    .and_then(|macros| macros.iter().find(|m| m.name == word))
-                {
-                    if let Ok(mac_uri) = Url::parse(&mac.definition.uri) {
-                        return Ok(Some(GotoDefinitionResponse::Scalar(Location {
-                            uri: mac_uri,
-                            range: mac.definition.range,
-                        })));
-                    }
-                }
-            }
-
-            let main_vars = self.main_file_variables.lock().unwrap();
-            if let Some(var) = main_vars
-                .get(&uri_str)
-                .and_then(|vars| vars.iter().find(|v| v.name == word))
-            {
-                if let Ok(var_uri) = Url::parse(&var.definition.uri) {
-                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
-                        uri: var_uri,
-                        range: var.definition.range,
-                    })));
-                }
-            }
-        }
-
         Ok(None)
     }
 
@@ -557,112 +513,6 @@ impl LSP {
                     }
                 }
 
-                // Add main file functions
-                if items.len() < 50 && self.features.main_file {
-                    let main_funcs = self.main_file_functions.lock().unwrap();
-                    if let Some(funcs) = main_funcs.get(&uri.to_string()) {
-                        for func in funcs {
-                            if func.name.starts_with(prefix) {
-                                let params_str = func.parameters.join(", ");
-                                let documentation = func
-                                    .documentation
-                                    .as_ref()
-                                    .map(|doc| Documentation::String(doc.clone()))
-                                    .or_else(|| {
-                                        Some(Documentation::String(
-                                            "Function from main file".to_string(),
-                                        ))
-                                    });
-
-                                items.push(CompletionItem {
-                                    label: func.name.clone(),
-                                    kind: Some(CompletionItemKind::FUNCTION),
-                                    detail: Some(format!("{}({}) (main file)", func.name, params_str)),
-                                    documentation,
-                                    insert_text: Some(format!("{}(${{1}})", func.name)),
-                                    insert_text_format: Some(InsertTextFormat::SNIPPET),
-                                    ..Default::default()
-                                });
-                            }
-                            if items.len() >= 50 {
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Add main file macros
-                if items.len() < 50 && self.features.main_file && self.features.macros {
-                    let main_macros = self.main_file_macros.lock().unwrap();
-                    if let Some(macros) = main_macros.get(&uri.to_string()) {
-                        for mac in macros {
-                            if mac.name.starts_with(prefix) {
-                                let params_str = mac.parameters.join(", ");
-                                let documentation = mac
-                                    .documentation
-                                    .as_ref()
-                                    .map(|doc| Documentation::String(doc.clone()))
-                                    .or_else(|| {
-                                        Some(Documentation::String(
-                                            "Macro from main file".to_string(),
-                                        ))
-                                    });
-
-                                items.push(CompletionItem {
-                                    label: mac.name.clone(),
-                                    kind: Some(CompletionItemKind::FUNCTION),
-                                    detail: Some(format!("define! {}({}) (main file)", mac.name, params_str)),
-                                    documentation,
-                                    insert_text: Some(format!("{}(${{1}})", mac.name)),
-                                    insert_text_format: Some(InsertTextFormat::SNIPPET),
-                                    ..Default::default()
-                                });
-                            }
-                            if items.len() >= 50 {
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Add main file variables
-                if items.len() < 50 && self.features.main_file {
-                    let main_vars = self.main_file_variables.lock().unwrap();
-                    if let Some(vars) = main_vars.get(&uri.to_string()) {
-                        for var in vars {
-                            if var.name.starts_with(prefix) {
-                                let (kind, detail_str) = match var.kind {
-                                    parser::types::VariableKind::EnumMember => {
-                                        (CompletionItemKind::ENUM_MEMBER, "Enum member")
-                                    }
-                                    parser::types::VariableKind::Define => {
-                                        (CompletionItemKind::CONSTANT, "Define")
-                                    }
-                                    parser::types::VariableKind::Regular => {
-                                        (CompletionItemKind::VARIABLE, "Variable")
-                                    }
-                                };
-
-                                let documentation = var
-                                    .documentation
-                                    .as_ref()
-                                    .map(|doc| Documentation::String(doc.clone()));
-
-                                items.push(CompletionItem {
-                                    label: var.name.clone(),
-                                    kind: Some(kind),
-                                    detail: Some(format!("{} (main file)", detail_str)),
-                                    documentation,
-                                    ..Default::default()
-                                });
-                            }
-                            if items.len() >= 50 {
-                                break;
-                            }
-                        }
-                    }
-                }
-
                 if items.len() < 50 {
                     for snippet in data::get_snippets() {
                         if snippet.name.starts_with(prefix) {
@@ -766,44 +616,6 @@ impl LSP {
                 }),
                 range: None,
             }));
-        }
-
-        // Check main file symbols
-        if self.features.main_file {
-            let main_funcs = self.main_file_functions.lock().unwrap();
-            if let Some(func) = main_funcs
-                .get(&uri_str)
-                .and_then(|funcs| funcs.iter().find(|f| f.name == word))
-            {
-                let mut content = format!(
-                    "```gpc\nfunction {}({})\n```\n\n*From main file*",
-                    func.name,
-                    func.parameters.join(", ")
-                );
-                if let Some(doc) = &func.documentation {
-                    content.push_str("\n\n");
-                    content.push_str(doc);
-                }
-                return Ok(create_hover(content));
-            }
-
-            let main_vars = self.main_file_variables.lock().unwrap();
-            if let Some(var) = main_vars
-                .get(&uri_str)
-                .and_then(|vars| vars.iter().find(|v| v.name == word))
-            {
-                let type_str = var
-                    .data_type
-                    .as_ref()
-                    .map(|dt| format!("{:?}", dt))
-                    .unwrap_or_else(|| "unknown".to_string());
-                let mut content = format!("```gpc\n{} {}\n```\n\n*From main file*", type_str, var.name);
-                if let Some(doc) = &var.documentation {
-                    content.push_str("\n\n");
-                    content.push_str(doc);
-                }
-                return Ok(create_hover(content));
-            }
         }
 
         Ok(None)
@@ -929,24 +741,6 @@ impl LSP {
             }
         }
 
-        // Add hints for main file functions
-        if self.features.main_file {
-            let main_funcs = self.main_file_functions.lock().unwrap();
-            if let Some(funcs) = main_funcs.get(&uri.to_string()) {
-                for (line_idx, line) in lines.iter().enumerate() {
-                    for func in funcs {
-                        hints.extend(self.create_function_call_hints(
-                            line,
-                            line_idx as u32,
-                            &func.name,
-                            &func.parameters,
-                            None,
-                        ));
-                    }
-                }
-            }
-        }
-
         if hints.is_empty() {
             Ok(None)
         } else {
@@ -1054,21 +848,6 @@ impl LSP {
         if self.features.imports {
             let imported_funcs = self.imported_functions.lock().unwrap();
             if let Some(func) = imported_funcs
-                .get(&uri_str)
-                .and_then(|funcs| funcs.iter().find(|f| f.name == func_name))
-            {
-                return Ok(create_help(create_signature(
-                    &func.name,
-                    &func.parameters,
-                    func.documentation.clone(),
-                )));
-            }
-        }
-
-        // Check main file functions
-        if self.features.main_file {
-            let main_funcs = self.main_file_functions.lock().unwrap();
-            if let Some(func) = main_funcs
                 .get(&uri_str)
                 .and_then(|funcs| funcs.iter().find(|f| f.name == func_name))
             {

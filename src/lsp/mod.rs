@@ -62,9 +62,6 @@ pub struct LSP {
     imported_functions: Arc<Mutex<HashMap<String, Vec<parser::types::UserFunction>>>>,
     imported_macros: Arc<Mutex<HashMap<String, Vec<parser::types::UserMacro>>>>,
     imported_variables: Arc<Mutex<HashMap<String, Vec<parser::types::UserVariable>>>>,
-    main_file_functions: Arc<Mutex<HashMap<String, Vec<parser::types::UserFunction>>>>,
-    main_file_macros: Arc<Mutex<HashMap<String, Vec<parser::types::UserMacro>>>>,
-    main_file_variables: Arc<Mutex<HashMap<String, Vec<parser::types::UserVariable>>>>,
     main_file_cache: Arc<Mutex<HashMap<String, Option<String>>>>,
     workspace_root: Arc<Mutex<Option<String>>>,
     last_edit_times: Arc<Mutex<HashMap<String, SystemTime>>>,
@@ -174,9 +171,6 @@ impl LSP {
             imported_functions: Arc::new(Mutex::new(HashMap::new())),
             imported_macros: Arc::new(Mutex::new(HashMap::new())),
             imported_variables: Arc::new(Mutex::new(HashMap::new())),
-            main_file_functions: Arc::new(Mutex::new(HashMap::new())),
-            main_file_macros: Arc::new(Mutex::new(HashMap::new())),
-            main_file_variables: Arc::new(Mutex::new(HashMap::new())),
             main_file_cache: Arc::new(Mutex::new(HashMap::new())),
             workspace_root: Arc::new(Mutex::new(None)),
             last_edit_times: Arc::new(Mutex::new(HashMap::new())),
@@ -326,7 +320,7 @@ impl LSP {
 
     /// Walk upward from the file's directory looking for `main.gpc`.
     /// Stops at workspace root (if set) or filesystem root.
-    /// Returns the filesystem path to main.gpc if found.
+    /// Caches results for all visited directories.
     fn detect_main_file(&self, uri: &str) -> Option<String> {
         let current_url = Url::parse(uri).ok()?;
         let current_path = current_url.to_file_path().ok()?;
@@ -338,6 +332,8 @@ impl LSP {
             .and_then(|root| Url::parse(root).ok())
             .and_then(|url| url.to_file_path().ok());
 
+        let mut visited_dirs = Vec::new();
+
         loop {
             let dir_key = current_dir.to_string_lossy().to_string();
 
@@ -345,18 +341,27 @@ impl LSP {
             {
                 let cache = self.main_file_cache.lock().unwrap();
                 if let Some(cached) = cache.get(&dir_key) {
-                    return cached.clone();
+                    // Backfill cache for all visited dirs
+                    let result = cached.clone();
+                    drop(cache);
+                    let mut cache = self.main_file_cache.lock().unwrap();
+                    for dir in visited_dirs {
+                        cache.insert(dir, result.clone());
+                    }
+                    return result;
                 }
             }
+
+            visited_dirs.push(dir_key);
 
             // Look for main.gpc in current directory
             let main_gpc = current_dir.join("main.gpc");
             if main_gpc.exists() {
                 let main_path = main_gpc.to_string_lossy().to_string();
-                self.main_file_cache
-                    .lock()
-                    .unwrap()
-                    .insert(dir_key, Some(main_path.clone()));
+                let mut cache = self.main_file_cache.lock().unwrap();
+                for dir in visited_dirs {
+                    cache.insert(dir, Some(main_path.clone()));
+                }
                 return Some(main_path);
             }
 
@@ -370,22 +375,21 @@ impl LSP {
             // Move to parent
             let parent = current_dir.parent()?;
             if parent == current_dir {
-                break; // Reached filesystem root
+                break;
             }
             current_dir = parent.to_path_buf();
         }
 
-        // Cache negative result for the original directory
-        let original_dir = current_path.parent()?.to_string_lossy().to_string();
-        self.main_file_cache
-            .lock()
-            .unwrap()
-            .insert(original_dir, None);
+        // Cache negative result for all visited dirs
+        let mut cache = self.main_file_cache.lock().unwrap();
+        for dir in visited_dirs {
+            cache.insert(dir, None);
+        }
         None
     }
 
-    /// Resolve symbols from the detected main.gpc file and its imports.
-    /// Stores them in main_file_functions/macros/variables keyed by the requesting URI.
+    /// Resolve symbols from the detected main.gpc and its imports.
+    /// Extends the existing imported_* maps so all handlers pick them up automatically.
     pub async fn resolve_main_file_symbols(&self, uri: &str) {
         if !self.features.main_file {
             return;
@@ -393,124 +397,133 @@ impl LSP {
 
         let main_file_path = match self.detect_main_file(uri) {
             Some(path) => path,
-            None => {
-                // Clear any previously cached main file symbols for this URI
-                self.main_file_functions.lock().unwrap().remove(uri);
-                self.main_file_macros.lock().unwrap().remove(uri);
-                self.main_file_variables.lock().unwrap().remove(uri);
-                return;
-            }
+            None => return,
         };
 
-        // Don't resolve main file symbols if we ARE the main file
-        let current_url = Url::parse(uri).ok();
-        let current_path = current_url.and_then(|u| u.to_file_path().ok());
-        if let Some(ref cp) = current_path {
-            if cp.to_string_lossy() == main_file_path {
-                self.main_file_functions.lock().unwrap().remove(uri);
-                self.main_file_macros.lock().unwrap().remove(uri);
-                self.main_file_variables.lock().unwrap().remove(uri);
+        // Don't resolve if we ARE the main file
+        if let Some(current_path) = Url::parse(uri).ok().and_then(|u| u.to_file_path().ok()) {
+            if current_path.to_string_lossy() == main_file_path {
                 return;
             }
         }
 
-        let mut all_functions = Vec::new();
-        let mut all_macros = Vec::new();
-        let mut all_variables = Vec::new();
+        let main_uri = Url::from_file_path(&main_file_path)
+            .map(|u| u.to_string())
+            .unwrap_or_else(|_| format!("file://{}", main_file_path));
 
-        // Parse main.gpc itself
-        let main_uri = format!("file://{}", main_file_path);
-        if let Ok(main_text) = tokio::fs::read_to_string(&main_file_path).await {
-            let functions = {
+        let Ok(main_text) = tokio::fs::read_to_string(&main_file_path).await else {
+            return;
+        };
+
+        let current_path = Url::parse(uri).ok().and_then(|u| u.to_file_path().ok());
+
+        // Extract symbols from main.gpc
+        let functions = {
+            let mut parser = self.parser.lock().unwrap();
+            parser.extract_user_functions(&main_text, &main_uri)
+        };
+        self.imported_functions
+            .lock()
+            .unwrap()
+            .entry(uri.to_string())
+            .or_default()
+            .extend(functions);
+
+        if self.features.macros {
+            let macros = {
                 let mut parser = self.parser.lock().unwrap();
-                parser.extract_user_functions(&main_text, &main_uri)
+                parser.extract_user_macros(&main_text, &main_uri)
             };
-            all_functions.extend(functions);
-
-            if self.features.macros {
-                let macros = {
-                    let mut parser = self.parser.lock().unwrap();
-                    parser.extract_user_macros(&main_text, &main_uri)
-                };
-                all_macros.extend(macros);
-            }
-
-            let variables = {
-                let mut parser = self.parser.lock().unwrap();
-                parser.extract_user_variables(&main_text, &main_uri)
-            };
-            all_variables.extend(variables);
-
-            // Follow imports from main.gpc recursively
-            let import_paths = {
-                let mut parser = self.parser.lock().unwrap();
-                parser.extract_imports(&main_text)
-            };
-
-            let main_dir = std::path::Path::new(&main_file_path).parent();
-            if let Some(main_dir) = main_dir {
-                for import_path in import_paths {
-                    let resolved = main_dir.join(&import_path);
-                    if let Some(resolved_str) = resolved.to_str() {
-                        // Skip if this import points to the file we're editing
-                        if let Some(ref cp) = current_path {
-                            if resolved == *cp {
-                                continue;
-                            }
-                        }
-
-                        if let Ok(imported_text) = tokio::fs::read_to_string(resolved_str).await {
-                            let resolved_uri = format!("file://{}", resolved_str);
-
-                            let functions = {
-                                let mut parser = self.parser.lock().unwrap();
-                                parser.extract_user_functions(&imported_text, &resolved_uri)
-                            };
-                            all_functions.extend(functions);
-
-                            if self.features.macros {
-                                let macros = {
-                                    let mut parser = self.parser.lock().unwrap();
-                                    parser.extract_user_macros(&imported_text, &resolved_uri)
-                                };
-                                all_macros.extend(macros);
-                            }
-
-                            let variables = {
-                                let mut parser = self.parser.lock().unwrap();
-                                parser.extract_user_variables(&imported_text, &resolved_uri)
-                            };
-                            all_variables.extend(variables);
-                        }
-                    }
-                }
-            }
-
-            self.log(&format!(
-                "Main file resolved for {}: {} ({} functions, {} macros, {} variables)",
-                uri,
-                main_file_path,
-                all_functions.len(),
-                all_macros.len(),
-                all_variables.len()
-            ))
-            .await;
+            self.imported_macros
+                .lock()
+                .unwrap()
+                .entry(uri.to_string())
+                .or_default()
+                .extend(macros);
         }
 
-        self.main_file_functions
+        let variables = {
+            let mut parser = self.parser.lock().unwrap();
+            parser.extract_user_variables(&main_text, &main_uri)
+        };
+        self.imported_variables
             .lock()
             .unwrap()
-            .insert(uri.to_string(), all_functions);
+            .entry(uri.to_string())
+            .or_default()
+            .extend(variables);
 
-        self.main_file_macros
-            .lock()
-            .unwrap()
-            .insert(uri.to_string(), all_macros);
+        // Follow imports from main.gpc
+        let import_paths = {
+            let mut parser = self.parser.lock().unwrap();
+            parser.extract_imports(&main_text)
+        };
 
-        self.main_file_variables
-            .lock()
-            .unwrap()
-            .insert(uri.to_string(), all_variables);
+        if let Some(main_dir) = std::path::Path::new(&main_file_path).parent() {
+            for import_path in import_paths {
+                let resolved = main_dir.join(&import_path);
+
+                // Skip the file we're currently editing
+                if let Some(ref cp) = current_path {
+                    if resolved == *cp {
+                        continue;
+                    }
+                }
+
+                let Some(resolved_str) = resolved.to_str() else {
+                    continue;
+                };
+
+                let Ok(imported_text) = tokio::fs::read_to_string(resolved_str).await else {
+                    continue;
+                };
+
+                let resolved_uri = Url::from_file_path(resolved_str)
+                    .map(|u| u.to_string())
+                    .unwrap_or_else(|_| format!("file://{}", resolved_str));
+
+                let functions = {
+                    let mut parser = self.parser.lock().unwrap();
+                    parser.extract_user_functions(&imported_text, &resolved_uri)
+                };
+                self.imported_functions
+                    .lock()
+                    .unwrap()
+                    .entry(uri.to_string())
+                    .or_default()
+                    .extend(functions);
+
+                if self.features.macros {
+                    let macros = {
+                        let mut parser = self.parser.lock().unwrap();
+                        parser.extract_user_macros(&imported_text, &resolved_uri)
+                    };
+                    self.imported_macros
+                        .lock()
+                        .unwrap()
+                        .entry(uri.to_string())
+                        .or_default()
+                        .extend(macros);
+                }
+
+                let variables = {
+                    let mut parser = self.parser.lock().unwrap();
+                    parser.extract_user_variables(&imported_text, &resolved_uri)
+                };
+                self.imported_variables
+                    .lock()
+                    .unwrap()
+                    .entry(uri.to_string())
+                    .or_default()
+                    .extend(variables);
+            }
+        }
+
+        self.log(&format!(
+            "Main file resolved for {}: {}",
+            uri, main_file_path
+        ))
+        .await;
     }
 
     fn check_duplicate_definitions(&self, uri: &str) -> Vec<Diagnostic> {
@@ -1075,21 +1088,6 @@ impl LSP {
             }
         }
 
-        // Lock main file variables early if main_file feature is enabled
-        let main_vars_guard = if self.features.main_file {
-            Some(self.main_file_variables.lock().unwrap())
-        } else {
-            None
-        };
-
-        if let Some(ref main_vars_guard) = main_vars_guard {
-            if let Some(vars) = main_vars_guard.get(uri) {
-                for var in vars {
-                    defined_vars.insert(&var.name);
-                }
-            }
-        }
-
         for constant in data::get_constants() {
             defined_vars.insert(constant.as_str());
         }
@@ -1192,21 +1190,6 @@ impl LSP {
             }
         }
 
-        // Also check main file functions
-        let main_funcs_guard = if self.features.main_file {
-            Some(self.main_file_functions.lock().unwrap())
-        } else {
-            None
-        };
-
-        if let Some(ref main_funcs_guard) = main_funcs_guard {
-            if let Some(funcs) = main_funcs_guard.get(uri) {
-                for func in funcs {
-                    defined_funcs.insert(&func.name, func.parameters.len());
-                }
-            }
-        }
-
         for builtin in data::get_builtins() {
             defined_funcs.insert(&builtin.name, builtin.parameters.len());
         }
@@ -1285,12 +1268,6 @@ impl LSP {
         let imported_macros = self.imported_macros.lock().unwrap();
         let imported = imported_macros.get(uri);
 
-        let main_macros_guard = if self.features.main_file {
-            Some(self.main_file_macros.lock().unwrap())
-        } else {
-            None
-        };
-
         let mut defined_macros: std::collections::HashMap<&str, bool> =
             std::collections::HashMap::new();
 
@@ -1303,14 +1280,6 @@ impl LSP {
         if let Some(imported) = imported {
             for macro_def in imported {
                 defined_macros.insert(&macro_def.name, macro_def.has_placeholder);
-            }
-        }
-
-        if let Some(ref main_macros_guard) = main_macros_guard {
-            if let Some(main_macros) = main_macros_guard.get(uri) {
-                for macro_def in main_macros {
-                    defined_macros.insert(&macro_def.name, macro_def.has_placeholder);
-                }
             }
         }
 
