@@ -390,7 +390,8 @@ impl LSP {
 
     /// Resolve symbols from the detected main.gpc and its imports.
     /// Extends the existing imported_* maps so all handlers pick them up automatically.
-    pub async fn resolve_main_file_symbols(&self, uri: &str) {
+    /// Must be called after `resolve_imports` which clears and repopulates imported_* maps.
+    async fn resolve_main_file_symbols(&self, uri: &str) {
         if !self.features.main_file {
             return;
         }
@@ -401,15 +402,16 @@ impl LSP {
         };
 
         // Don't resolve if we ARE the main file
+        let main_path = std::path::Path::new(&main_file_path);
         if let Some(current_path) = Url::parse(uri).ok().and_then(|u| u.to_file_path().ok()) {
-            if current_path.to_string_lossy() == main_file_path {
+            if current_path == main_path {
                 return;
             }
         }
 
-        let main_uri = Url::from_file_path(&main_file_path)
-            .map(|u| u.to_string())
-            .unwrap_or_else(|_| format!("file://{}", main_file_path));
+        let Ok(main_uri) = Url::from_file_path(&main_file_path).map(|u| u.to_string()) else {
+            return;
+        };
 
         let Ok(main_text) = tokio::fs::read_to_string(&main_file_path).await else {
             return;
@@ -478,9 +480,10 @@ impl LSP {
                     continue;
                 };
 
-                let resolved_uri = Url::from_file_path(resolved_str)
-                    .map(|u| u.to_string())
-                    .unwrap_or_else(|_| format!("file://{}", resolved_str));
+                let Ok(resolved_uri) = Url::from_file_path(resolved_str).map(|u| u.to_string())
+                else {
+                    continue;
+                };
 
                 let functions = {
                     let mut parser = self.parser.lock().unwrap();
@@ -1064,8 +1067,8 @@ impl LSP {
         let user_vars = self.user_variables.lock().unwrap();
         let vars = user_vars.get(uri);
 
-        // Lock imported variables early if imports feature is enabled
-        let imported_vars_guard = if self.features.imports {
+        // Lock imported variables early if imports or main_file feature is enabled
+        let imported_vars_guard = if self.features.imports || self.features.main_file {
             Some(self.imported_variables.lock().unwrap())
         } else {
             None
@@ -1165,8 +1168,8 @@ impl LSP {
         let user_funcs = self.user_functions.lock().unwrap();
         let funcs = user_funcs.get(uri);
 
-        // Lock imported functions early if imports feature is enabled
-        let imported_funcs_guard = if self.features.imports {
+        // Lock imported functions early if imports or main_file feature is enabled
+        let imported_funcs_guard = if self.features.imports || self.features.main_file {
             Some(self.imported_functions.lock().unwrap())
         } else {
             None

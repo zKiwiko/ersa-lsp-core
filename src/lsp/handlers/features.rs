@@ -160,8 +160,8 @@ impl LSP {
             }
         }
 
-        // Check imported symbols
-        if self.features.imports {
+        // Check imported / main file symbols
+        if self.features.imports || self.features.main_file {
             let imported_funcs = self.imported_functions.lock().unwrap();
             if let Some(func) = imported_funcs
                 .get(&uri_str)
@@ -408,7 +408,7 @@ impl LSP {
                 }
 
                 // Add imported functions
-                if items.len() < 50 && self.features.imports {
+                if items.len() < 50 && (self.features.imports || self.features.main_file) {
                     let imported_funcs = self.imported_functions.lock().unwrap();
                     if let Some(funcs) = imported_funcs.get(&uri.to_string()) {
                         for func in funcs {
@@ -442,7 +442,7 @@ impl LSP {
                 }
 
                 // Add imported macros
-                if items.len() < 50 && self.features.imports && self.features.macros {
+                if items.len() < 50 && (self.features.imports || self.features.main_file) && self.features.macros {
                     let imported_macros = self.imported_macros.lock().unwrap();
                     if let Some(macros) = imported_macros.get(&uri.to_string()) {
                         for mac in macros {
@@ -476,7 +476,7 @@ impl LSP {
                 }
 
                 // Add imported variables
-                if items.len() < 50 && self.features.imports {
+                if items.len() < 50 && (self.features.imports || self.features.main_file) {
                     let imported_vars = self.imported_variables.lock().unwrap();
                     if let Some(vars) = imported_vars.get(&uri.to_string()) {
                         for var in vars {
@@ -723,8 +723,8 @@ impl LSP {
             }
         }
 
-        // Add hints for imported functions
-        if self.features.imports {
+        // Add hints for imported / main file functions
+        if self.features.imports || self.features.main_file {
             let imported_funcs = self.imported_functions.lock().unwrap();
             if let Some(funcs) = imported_funcs.get(&uri.to_string()) {
                 for (line_idx, line) in lines.iter().enumerate() {
@@ -844,8 +844,8 @@ impl LSP {
             )));
         }
 
-        // Check imported functions
-        if self.features.imports {
+        // Check imported / main file functions
+        if self.features.imports || self.features.main_file {
             let imported_funcs = self.imported_functions.lock().unwrap();
             if let Some(func) = imported_funcs
                 .get(&uri_str)
