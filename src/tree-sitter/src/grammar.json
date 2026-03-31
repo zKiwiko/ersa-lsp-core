@@ -1643,10 +1643,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "macro_call"
-        },
-        {
-          "type": "SYMBOL",
           "name": "array_access"
         },
         {
@@ -2443,12 +2439,7 @@
       "name": "block_comment"
     }
   ],
-  "conflicts": [
-    [
-      "_statement",
-      "expression"
-    ]
-  ],
+  "conflicts": [],
   "precedences": [],
   "externals": [],
   "inline": [],

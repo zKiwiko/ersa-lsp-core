@@ -1,3 +1,23 @@
+## 0.3.1 - Mar 30 2026
+
+### Fixed
+
+- Function calls in expressions to error and require a `!`, even when they're not macros.
+- Semantic highlighting token sorting.
+- Semantic highlighting function token positions.
+
+### Added
+
+- Macro Semantic Highlights -- When enabled.
+- Basic formatting logic
+  - 4 space indentation
+  - space after `,`
+  - space before `{`
+  - space after control keywords - but before `{`
+  - sollapse multiple spaces
+  - trim empty lines
+  - strip trailing whitespace
+
 ## 0.3.0 - Feb 13 2026
 
 ### Added

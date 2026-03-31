@@ -1,3 +1,6 @@
 /target
 /examples
 src/tree/queries
+.claude/
+.github/
+*.gpc

@@ -5,8 +5,6 @@ module.exports = grammar({
 
   word: ($) => $.identifier,
 
-  conflicts: ($) => [[$._statement, $.expression]],
-
   rules: {
     source_file: ($) => repeat($._global_declaration),
 
@@ -325,7 +323,6 @@ module.exports = grammar({
         $.unary_expression,
         $.postfix_expression,
         $.call_expression,
-        $.macro_call,
         $.array_access,
         $._primary_expression,
       ),

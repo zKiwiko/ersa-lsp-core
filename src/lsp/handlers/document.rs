@@ -289,9 +289,30 @@ impl LSP {
     }
 
     pub async fn handle_did_close(&self, params: DidCloseTextDocumentParams) {
-        let uri = params.text_document.uri;
+        let uri = params.text_document.uri.to_string();
+
+        self.documents.lock().unwrap().remove(&uri);
+        self.user_functions.lock().unwrap().remove(&uri);
+        self.user_macros.lock().unwrap().remove(&uri);
+        self.user_variables.lock().unwrap().remove(&uri);
+        self.imported_functions.lock().unwrap().remove(&uri);
+        self.imported_macros.lock().unwrap().remove(&uri);
+        self.imported_variables.lock().unwrap().remove(&uri);
+        self.last_edit_times.lock().unwrap().remove(&uri);
+
+        if let Ok(parsed_uri) = tower_lsp::lsp_types::Url::parse(&uri) {
+            self.client
+                .publish_diagnostics(parsed_uri, vec![], None)
+                .await;
+        }
+
         self.client
-            .log_message(MessageType::INFO, format!("Document closed: {}", uri))
+            .log_message(
+                MessageType::INFO,
+                format!("Document closed: {}", uri),
+            )
             .await;
+
+        std::process::exit(0);
     }
 }

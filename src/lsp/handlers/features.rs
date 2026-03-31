@@ -1185,129 +1185,152 @@ impl LSP {
         const TOKEN_TYPE_VARIABLE: u32 = 1;
         const TOKEN_TYPE_ENUM_MEMBER: u32 = 2;
         const TOKEN_TYPE_PARAMETER: u32 = 3;
+        const TOKEN_TYPE_MACRO: u32 = 4;
 
         const TOKEN_MODIFIER_DECLARATION: u32 = 1 << 0;
         const TOKEN_MODIFIER_READONLY: u32 = 1 << 1;
 
-        let mut tokens_data: Vec<SemanticToken> = Vec::new();
-        let mut prev_line = 0;
-        let mut prev_start = 0;
-
-        let mut add_token =
-            |line: u32, start: u32, length: u32, token_type: u32, modifiers: u32| {
-                let delta_line = line - prev_line;
-                let delta_start = if delta_line == 0 {
-                    start - prev_start
-                } else {
-                    start
-                };
-
-                tokens_data.push(SemanticToken {
-                    delta_line,
-                    delta_start,
-                    length,
-                    token_type,
-                    token_modifiers_bitset: modifiers,
-                });
-
-                prev_line = line;
-                prev_start = start;
-            };
-
-        let user_funcs = self.user_functions.lock().unwrap();
-        if let Some(funcs) = user_funcs.get(&uri.to_string()) {
-            for func in funcs {
-                add_token(
-                    func.definition.range.start.line,
-                    func.definition.range.start.character,
-                    func.name.len() as u32,
-                    TOKEN_TYPE_FUNCTION,
-                    TOKEN_MODIFIER_DECLARATION,
-                );
-
-                for param in &func.parameters {
-                    if let Some(line_text) = lines.get(func.definition.range.start.line as usize) {
-                        if let Some(pos) = line_text.find(param.as_str()) {
-                            add_token(
-                                func.definition.range.start.line,
-                                pos as u32,
-                                param.len() as u32,
-                                TOKEN_TYPE_PARAMETER,
-                                TOKEN_MODIFIER_DECLARATION | TOKEN_MODIFIER_READONLY,
-                            );
+        // Find the column of `name` in the given line, starting the search at `min_col`.
+        // Returns None if not found at a word boundary.
+        fn find_name_col(lines: &[&str], line_idx: usize, name: &str, min_col: usize) -> Option<u32> {
+            let line = lines.get(line_idx)?;
+            let mut offset = min_col.min(line.len());
+            while offset < line.len() {
+                match line[offset..].find(name) {
+                    Some(rel) => {
+                        let abs = offset + rel;
+                        if is_word_boundary(line, abs, abs + name.len()) {
+                            return Some(abs as u32);
                         }
+                        offset = abs + 1;
+                    }
+                    None => break,
+                }
+            }
+            None
+        }
+
+        // Collect all tokens as (line, col, len, token_type, modifiers).
+        // Must be sorted by (line, col) before encoding as deltas.
+        let mut raw: Vec<(u32, u32, u32, u32, u32)> = Vec::new();
+
+        // --- Functions ---
+        let func_data: Vec<_> = {
+            let guard = self.user_functions.lock().unwrap();
+            guard
+                .get(&uri.to_string())
+                .map(|v| v.clone())
+                .unwrap_or_default()
+        };
+        for func in &func_data {
+            let decl_line = func.definition.range.start.line as usize;
+            let keyword_col = func.definition.range.start.character as usize;
+
+            // Declaration: name sits after the `function` keyword on the same line.
+            if let Some(col) = find_name_col(&lines, decl_line, &func.name, keyword_col) {
+                raw.push((decl_line as u32, col, func.name.len() as u32, TOKEN_TYPE_FUNCTION, TOKEN_MODIFIER_DECLARATION));
+
+                // Parameters are on the same line, after the function name.
+                let mut param_min = (col + func.name.len() as u32) as usize;
+                for param in &func.parameters {
+                    if let Some(pcol) = find_name_col(&lines, decl_line, param, param_min) {
+                        raw.push((decl_line as u32, pcol, param.len() as u32, TOKEN_TYPE_PARAMETER, TOKEN_MODIFIER_DECLARATION | TOKEN_MODIFIER_READONLY));
+                        param_min = (pcol + param.len() as u32) as usize;
                     }
                 }
+            }
 
-                let def_pos = (
-                    func.definition.range.start.line,
-                    func.definition.range.start.character,
-                );
-                for range in self.find_word_positions(&lines, &func.name) {
-                    let pos = (range.start.line, range.start.character);
-                    if pos != def_pos {
-                        add_token(
-                            range.start.line,
-                            range.start.character,
-                            func.name.len() as u32,
-                            TOKEN_TYPE_FUNCTION,
-                            0,
-                        );
+            // References — every occurrence except the declaration line.
+            for range in self.find_word_positions(&lines, &func.name) {
+                if range.start.line as usize == decl_line {
+                    continue;
+                }
+                raw.push((range.start.line, range.start.character, func.name.len() as u32, TOKEN_TYPE_FUNCTION, 0));
+            }
+        }
+
+        // --- Variables ---
+        let var_data: Vec<_> = {
+            let guard = self.user_variables.lock().unwrap();
+            guard
+                .get(&uri.to_string())
+                .map(|v| v.clone())
+                .unwrap_or_default()
+        };
+        for var in &var_data {
+            let token_type = match var.kind {
+                parser::types::VariableKind::EnumMember => TOKEN_TYPE_ENUM_MEMBER,
+                _ => TOKEN_TYPE_VARIABLE,
+            };
+            let is_immutable = matches!(
+                var.var_type.as_ref().map(|v| &v.mutability),
+                Some(parser::types::Mutability::Immutable)
+            );
+            let decl_modifiers = TOKEN_MODIFIER_DECLARATION | if is_immutable { TOKEN_MODIFIER_READONLY } else { 0 };
+            let ref_modifiers = if is_immutable { TOKEN_MODIFIER_READONLY } else { 0 };
+
+            let decl_line = var.definition.range.start.line;
+            let decl_col = var.definition.range.start.character;
+            raw.push((decl_line, decl_col, var.name.len() as u32, token_type, decl_modifiers));
+
+            for range in self.find_word_positions(&lines, &var.name) {
+                if range.start.line == decl_line && range.start.character == decl_col {
+                    continue;
+                }
+                raw.push((range.start.line, range.start.character, var.name.len() as u32, token_type, ref_modifiers));
+            }
+        }
+
+        // --- Macros (feature-gated) ---
+        if self.features.macros {
+            let macro_data: Vec<_> = {
+                let guard = self.user_macros.lock().unwrap();
+                guard
+                    .get(&uri.to_string())
+                    .map(|v| v.clone())
+                    .unwrap_or_default()
+            };
+            for mac in &macro_data {
+                let decl_line = mac.definition.range.start.line as usize;
+                let keyword_col = mac.definition.range.start.character as usize;
+
+                // Declaration: name sits after `define!` keyword.
+                if let Some(col) = find_name_col(&lines, decl_line, &mac.name, keyword_col) {
+                    raw.push((decl_line as u32, col, mac.name.len() as u32, TOKEN_TYPE_MACRO, TOKEN_MODIFIER_DECLARATION));
+                }
+
+                // References — every occurrence except the declaration line.
+                for range in self.find_word_positions(&lines, &mac.name) {
+                    if range.start.line as usize == decl_line {
+                        continue;
                     }
+                    raw.push((range.start.line, range.start.character, mac.name.len() as u32, TOKEN_TYPE_MACRO, 0));
                 }
             }
         }
 
-        let user_vars = self.user_variables.lock().unwrap();
-        if let Some(vars) = user_vars.get(&uri.to_string()) {
-            for var in vars {
-                let token_type = match var.kind {
-                    parser::types::VariableKind::EnumMember => TOKEN_TYPE_ENUM_MEMBER,
-                    parser::types::VariableKind::Define => TOKEN_TYPE_VARIABLE,
-                    parser::types::VariableKind::Regular => TOKEN_TYPE_VARIABLE,
-                };
+        // Sort by (line, col) — required for correct delta encoding.
+        raw.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
 
-                let mut modifiers = TOKEN_MODIFIER_DECLARATION;
-                if let Some(var_type) = &var.var_type {
-                    if matches!(var_type.mutability, parser::types::Mutability::Immutable) {
-                        modifiers |= TOKEN_MODIFIER_READONLY;
-                    }
-                }
+        // Remove exact duplicates (same position from overlapping search results).
+        raw.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
 
-                add_token(
-                    var.definition.range.start.line,
-                    var.definition.range.start.character,
-                    var.name.len() as u32,
-                    token_type,
-                    modifiers,
-                );
-
-                let def_pos = (
-                    var.definition.range.start.line,
-                    var.definition.range.start.character,
-                );
-                let ref_modifiers = if matches!(
-                    var.var_type.as_ref().map(|v| &v.mutability),
-                    Some(parser::types::Mutability::Immutable)
-                ) {
-                    TOKEN_MODIFIER_READONLY
-                } else {
-                    0
-                };
-
-                for range in self.find_word_positions(&lines, &var.name) {
-                    let pos = (range.start.line, range.start.character);
-                    if pos != def_pos {
-                        add_token(
-                            range.start.line,
-                            range.start.character,
-                            var.name.len() as u32,
-                            token_type,
-                            ref_modifiers,
-                        );
-                    }
-                }
-            }
+        // Encode as deltas.
+        let mut tokens_data: Vec<SemanticToken> = Vec::with_capacity(raw.len());
+        let mut prev_line = 0u32;
+        let mut prev_start = 0u32;
+        for (line, start, length, token_type, modifiers) in raw {
+            let delta_line = line - prev_line;
+            let delta_start = if delta_line == 0 { start - prev_start } else { start };
+            tokens_data.push(SemanticToken {
+                delta_line,
+                delta_start,
+                length,
+                token_type,
+                token_modifiers_bitset: modifiers,
+            });
+            prev_line = line;
+            prev_start = start;
         }
 
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {

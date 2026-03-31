@@ -1,4 +1,5 @@
 pub mod data;
+pub mod formatter;
 pub mod handlers;
 pub mod parser;
 mod tree_visitor;
@@ -150,6 +151,10 @@ impl LanguageServer for LSP {
 
     async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
         self.handle_code_lens(params).await
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        self.handle_formatting(params).await
     }
 }
 
@@ -1093,6 +1098,44 @@ impl LSP {
         }
 
         diagnostics
+    }
+
+    async fn handle_formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        let Some(source) = self
+            .documents
+            .lock()
+            .unwrap()
+            .get(&uri.to_string())
+            .cloned()
+        else {
+            return Ok(None);
+        };
+
+        let formatted = formatter::format_source(&source);
+        if formatted == source {
+            return Ok(None);
+        }
+
+        let line_count = source.lines().count() as u32;
+        let last_line_len = source.lines().last().unwrap_or("").len() as u32;
+
+        Ok(Some(vec![TextEdit {
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: line_count,
+                    character: last_line_len,
+                },
+            },
+            new_text: formatted,
+        }]))
     }
 }
 

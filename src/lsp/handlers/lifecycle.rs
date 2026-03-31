@@ -49,6 +49,7 @@ impl LSP {
                                     SemanticTokenType::VARIABLE,
                                     SemanticTokenType::ENUM_MEMBER,
                                     SemanticTokenType::PARAMETER,
+                                    SemanticTokenType::MACRO,
                                 ],
                                 token_modifiers: vec![
                                     SemanticTokenModifier::DECLARATION,
