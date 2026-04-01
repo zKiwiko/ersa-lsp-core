@@ -132,7 +132,8 @@ impl GpcParser {
     }
 
     fn extract_define_variable(node: Node, source: &str, uri: &str) -> Option<types::UserVariable> {
-        let name = get_child_by_kind(node, "identifier")?
+        let ident_node = get_child_by_kind(node, "identifier")?;
+        let name = ident_node
             .utf8_text(source.as_bytes())
             .ok()?
             .to_string();
@@ -147,7 +148,7 @@ impl GpcParser {
                 array_dims: 0,
             }),
             kind: types::VariableKind::Define,
-            definition: Self::node_to_location(node, uri),
+            definition: Self::node_to_location(ident_node, uri),
             documentation,
         })
     }

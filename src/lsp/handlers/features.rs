@@ -1091,6 +1091,10 @@ impl LSP {
     }
 
     pub async fn handle_code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        if !self.features.code_lens {
+            return Ok(None);
+        }
+
         let uri = params.text_document.uri;
         let Some(text) = self.get_document_text(&uri) else {
             return Ok(None);

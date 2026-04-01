@@ -16,6 +16,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 pub struct Features {
     pub imports: bool,
     pub macros: bool,
+    pub code_lens: bool,
 }
 
 impl Features {
@@ -23,6 +24,7 @@ impl Features {
         Features {
             imports: false,
             macros: false,
+            code_lens: false,
         }
     }
 
@@ -30,6 +32,7 @@ impl Features {
         Features {
             imports: true,
             macros: true,
+            code_lens: true,
         }
     }
 
@@ -40,6 +43,7 @@ impl Features {
             match feature.to_lowercase().as_str() {
                 "imports" => features.imports = true,
                 "macros" => features.macros = true,
+                "code_lens" => features.code_lens = true,
                 "all" => return Features::all(),
                 _ => {}
             }

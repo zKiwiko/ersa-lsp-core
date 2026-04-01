@@ -13,7 +13,7 @@ struct Args {
     #[arg(long)]
     version: bool,
 
-    /// Enable experimental features (comma-separated: imports, macros, all)
+    /// Enable experimental features (comma-separated: imports, macros, code_lens, all)
     #[arg(long, value_delimiter = ',')]
     features: Option<Vec<String>>,
 }
@@ -35,6 +35,6 @@ async fn main() {
         eprintln!("Usage: ersa_lsp --stdio [--features <features>]");
         eprintln!("       ersa_lsp --version");
         eprintln!();
-        eprintln!("Available features: imports, macros, all");
+        eprintln!("Available features: imports, macros, code_lens, all");
     }
 }

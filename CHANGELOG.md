@@ -1,8 +1,19 @@
+## 0.3.1 - April 1 2026
+
+### Fixed
+
+- Semantic higlighting for variables.
+
+### Changed
+
+- Code Lens to an optional toggle.
+  - Toggle with: `--features code_lens` or `--features all`
+
 ## 0.3.1 - Mar 30 2026
 
 ### Fixed
 
-- Function calls in expressions to error and require a `!`, even when they're not macros.
+- Function calls in expressions to error and require an `!`, even when they're not macros.
 - Semantic highlighting token sorting.
 - Semantic highlighting function token positions.
 
@@ -14,7 +25,7 @@
   - space after `,`
   - space before `{`
   - space after control keywords - but before `{`
-  - sollapse multiple spaces
+  - collapse multiple spaces
   - trim empty lines
   - strip trailing whitespace
 
